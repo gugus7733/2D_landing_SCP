@@ -389,7 +389,7 @@ if ~isempty(control_log.t)
     fprintf('Control trajectory saved to %s for replay\n', control_replay_filename);
 end
 
-%% (4) Visualization
+%% Visualizations
 visualize_results_2d(sim_history, P, fm);
 
 % Interactive trajectory plot
