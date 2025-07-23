@@ -190,7 +190,7 @@ control_replay_filename = 'control_replay.mat'; % Filename for saved control log
 %% MPC Simulation Loop
 % Initialize simulation state
 current_state = [P.x0; P.y0; P.vx0; P.vy0; P.theta0; P.omega0; P.m0];
-sim_history = struct('t', [], 'X', [], 'U', []);
+sim_history = struct('t', [], 'X', [], 'U', [], 'vectors', struct('velocity', [], 'orientation', [], 'thrust', []));
 last_scp_sol = [];
 last_scp_log = [];
 scp_debug_history = struct('time', [], 'log', [], 'sol', []);
@@ -301,15 +301,42 @@ try
         num_sim_steps = round(dt_scp_current / P.dt_sim);
 
         for i = 1:num_sim_steps
-            % Log state at each small sim step
+            % Extract state components for vector calculations
+            x_pos     = temp_state(1);
+            y_pos     = temp_state(2);
+            vx        = temp_state(3);
+            vy        = temp_state(4);
+            theta     = temp_state(5);
+            omega     = temp_state(6);
+            
+            % Calculate vectors for visualization
+            % Velocity vector (blue) - inertial frame
+            velocity_vector = [vx; vy];
+            
+            % Rocket orientation vector (black) - body y-axis in inertial frame
+            rocket_up_body = [0; 1]; % Unit vector along rocket body y-axis
+            orientation_vector = T_I_B(theta) * rocket_up_body;
+            
+            % Thrust vector (green) - thrust direction in inertial frame
+            thrust_body = [0; T_applied]; % Thrust along body y-axis
+            thrust_gimbal_body = T_B_thrust(delta_applied) * thrust_body;
+            thrust_vector = T_I_B(theta) * thrust_gimbal_body;
+            
+            % Log state and vectors at each small sim step
             if isempty(sim_history.t)
                 sim_history.t = sim_time;
                 sim_history.X = temp_state;
                 sim_history.U = [T_applied; delta_applied];
+                sim_history.vectors.velocity = velocity_vector;
+                sim_history.vectors.orientation = orientation_vector;
+                sim_history.vectors.thrust = thrust_vector;
             else
                 sim_history.t(end+1) = sim_time;
                 sim_history.X(:,end+1) = temp_state;
                 sim_history.U(:,end+1) = [T_applied; delta_applied];
+                sim_history.vectors.velocity(:,end+1) = velocity_vector;
+                sim_history.vectors.orientation(:,end+1) = orientation_vector;
+                sim_history.vectors.thrust(:,end+1) = thrust_vector;
             end
 
             % Simulate one small step
@@ -364,6 +391,9 @@ end
 
 %% (4) Visualization
 visualize_results_2d(sim_history, P, fm);
+
+% Interactive trajectory plot
+plot_interactive_trajectory_2d(sim_history, P, fm);
 
 % Add SCP convergence analysis plots
 % fprintf('\nGenerating SCP convergence analysis...\n');

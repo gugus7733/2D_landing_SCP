@@ -67,8 +67,7 @@ title('2D Landing Trajectory with Rocket Attitude');
 legend('Trajectory', 'Rocket Attitude', 'Start', 'Target');
 
 % --- Multi-Panel Summary Plot ---
-fh = fm.newFigure('MPC_2D_Summary');
-fig = fh.Parent;
+fig = fm.newFigure('MPC_2D_Summary');
 TL = tiledlayout(fig, 4, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 title(TL, '2D MPC Simulation Results');
 
@@ -101,8 +100,7 @@ hold on; yline(rad2deg(P.delta_max), 'k--'); yline(rad2deg(-P.delta_max), 'k--')
 xlabel('Time (s)'); ylabel('Gimbal \delta (deg)');
 
 % --- Additional Figure: Speed Norm, Mass, Theta, Alpha ---
-fh2 = fm.newFigure('MPC_2D_States_Overview');
-fig2 = fh2.Parent;
+fig2 = fm.newFigure('MPC_2D_States_Overview');
 TL2 = tiledlayout(fig2, 4, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
 title(TL2, 'Key States Overview');
 
