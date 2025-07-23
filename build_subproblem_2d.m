@@ -1,4 +1,4 @@
-function prob = build_subproblem_2d(X_ref, U_ref, P)
+function prob = build_subproblem_2d(X_ref, U_ref, P, t_remaining, retry_level)
 %BUILD_SUBPROBLEM_2D Constructs the convex QP for the rocket landing.
 %
 % This function performs the core work of SCP:
@@ -7,6 +7,15 @@ function prob = build_subproblem_2d(X_ref, U_ref, P)
 % 2. Formulates the cost function (penalizing fuel, control effort, etc.).
 % 3. Sets up equality constraints (dynamics) and inequality constraints
 %    (control limits, trust regions).
+% 4. Enhanced: Uses time-dependent slack weights and bounds
+
+% Handle optional parameters for backward compatibility
+if nargin < 4
+    t_remaining = P.T; % Use full horizon if not specified
+end
+if nargin < 5
+    retry_level = 0; % No retry if not specified
+end
 
 N = P.N;
 n_x = P.n_states;
@@ -38,9 +47,17 @@ H_ddelta = D' * D * P.w_ddelta;
 H(u_idx(1,:), u_idx(1,:)) = H(u_idx(1,:), u_idx(1,:)) + H_dT;
 H(u_idx(2,:), u_idx(2,:)) = H(u_idx(2,:), u_idx(2,:)) + H_ddelta;
 
-% Slack variable penalty (L1 norm)
-f(prob.idx.s_v) = P.w_slack;
-f(prob.idx.s_w) = P.w_slack;
+% Enhanced slack variable penalty (time-dependent L1 norm)
+if isfield(P, 'w_slack_initial') && isfield(P, 'w_slack_terminal')
+    % Use enhanced slack management
+    w_slack_current = slack_management_utils('compute_slack_weight', t_remaining, P.T, P);
+    f(prob.idx.s_v) = w_slack_current;
+    f(prob.idx.s_w) = w_slack_current;
+else
+    % Fallback to legacy constant weight
+    f(prob.idx.s_v) = P.w_slack;
+    f(prob.idx.s_w) = P.w_slack;
+end
 
 % --- Dynamics Constraints: Aeq z = beq ---
 % Allocate rows for: initial (7) + dynamics (7*N) + terminal (6)
@@ -108,9 +125,28 @@ ub(u_indices(1,:)') = P.T_max;
 lb(u_indices(2,:)') = -P.delta_max;
 ub(u_indices(2,:)') = P.delta_max;
 
-% Slack bounds (must be positive)
+% Enhanced slack bounds (positive with adaptive upper bounds)
 lb(prob.idx.s_v) = 0;
 lb(prob.idx.s_w) = 0;
+
+% Set adaptive upper bounds for slack variables
+if isfield(P, 'slack_max_initial') && isfield(P, 'slack_max_terminal')
+    % Use enhanced slack management with retry-aware bounds
+    s_max_vector = slack_management_utils('compute_slack_bounds', t_remaining, P.T, P, retry_level);
+    
+    % Apply bounds to velocity slack variables (s_v: [vx; vy] for each time step)
+    s_v_indices = reshape(prob.idx.s_v, 2, N);
+    ub(s_v_indices(1,:)') = s_max_vector(1); % vx slack bounds
+    ub(s_v_indices(2,:)') = s_max_vector(2); % vy slack bounds
+    
+    % Apply bounds to angular velocity slack variables (s_w: omega for each time step)
+    ub(prob.idx.s_w) = s_max_vector(3); % omega slack bounds
+    
+    % Log slack bounds if this is a retry
+    if retry_level > 0
+        slack_management_utils('log_slack_status', t_remaining, P.T, P, 0, retry_level);
+    end
+end
 
 % Trust region bounds on controls
 ub(u_indices(1,:)') = min(ub(u_indices(1,:)'), U_ref(1,:)' + P.trust_T);

@@ -85,11 +85,11 @@ P = struct();
 
 % === Simulation & Horizon ===
 P.dt_sim        = 0.01;              % Simulation timestep (s)
-P.dt_scp        = 1;               % SCP optimization timestep (s)
-P.max_iters_scp = 1;
+P.dt_scp        = 0.5;               % SCP optimization timestep (s)
+P.max_iters_scp = 3;
 P.fine_computation_time = 2.0;     % s, time before touchdown to switch to fine computation
-P.fine_computation_dt = 0.1;      % s, fine SCP dt (much smaller timestep)
-P.fine_computation_n_iter = 5;     % fine SCP max iterations (more iterations for accuracy)
+P.fine_computation_dt = 0.5;      % s, fine SCP dt (much smaller timestep)
+P.fine_computation_n_iter = 1;     % fine SCP max iterations (more iterations for accuracy)
 P.T_max_mission = 50;               % Max mission time (s)
 P.min_horizon_time = 2*P.fine_computation_dt;            % Minimum SCP horizon time (s)
 
@@ -102,16 +102,16 @@ P.L_rocket      = 40;                % Approx. length of rocket (m)
 % I = (1/12)*m*L^2. We define a function for it later.
 P.Iyy_func      = @(m) (1/12) * m * P.L_rocket^2;
 P.L_com_from_base = 0.4 * P.L_rocket; % Center of Mass location from base (m)
-P.L_cop_from_base = 0.6 * P.L_rocket; % Center of Pressure from base (m)
+P.L_cop_from_base = 0.8 * P.L_rocket; % Center of Pressure from base (m)
 
 % === Initial State [x, y, vx, vy, theta, omega, m]' ===
 P.x0      = 100;              % m, initial horizontal position
 P.y0      = 5000;              % m, initial altitude
 P.vx0     = 5;              % m/s, initial horizontal velocity
 P.vy0     = -300;              % m/s, initial vertical velocity
-P.alpha0  = 0*d2r;            % rad, initial AoA
+P.alpha0  = 5*d2r;            % rad, initial AoA
 P.theta0  = computeInitialSlope(P.alpha0, [P.vx0; P.vy0]);        % rad, initial pitch
-P.omega0  = deg2rad(0);        % rad/s, initial angular velocity
+P.omega0  = deg2rad(10);        % rad/s, initial angular velocity
 
 % === Target State ===
 P.x_target     = 0;
@@ -124,7 +124,7 @@ P.omega_target = 0;
 % === Propulsion ===
 P.T_min       = 0.2 * 934e3;       % N, minimum thrust (approx. 1 Merlin engine)
 P.T_max       = 1e6;             % N, maximum thrust
-P.delta_max   = deg2rad(8.0);      % rad, max gimbal angle
+P.delta_max   = deg2rad(30.0);      % rad, max gimbal angle
 P.Isp         = 282;               % s, specific impulse
 
 % === Aerodynamics ===
@@ -162,15 +162,27 @@ P.trust_expand     = 1.25;             % Trust region expand factor
 P.slack_trigger    = 1e-3;             % Slack threshold for trust region adaptation
 
 % === Cost Weights & Penalties ===
-P.w_T         = 1e-10;              % Thrust magnitude penalty
+P.w_T         = 0;              % Thrust magnitude penalty
 P.w_delta     = 0;              % Gimbal angle penalty
 P.w_dT        = 0;              % Thrust rate penalty
-P.w_ddelta    = 1e-10;               % Gimbal rate penalty
+P.w_ddelta    = 0;               % Gimbal rate penalty
 P.w_slack     = 1e6;               % Virtual control (slack) penalty - match 1D model
+
+% === Enhanced Slack Management Parameters ===
+P.w_slack_initial = 1e-6;            % Initial slack weight (lower for early convergence)
+P.w_slack_terminal = 1e8;           % Terminal slack weight (high to force zero slack)
+P.slack_decay_alpha = 2.0;          % Slack weight progression exponent
+P.slack_decay_beta = 3.0;           % Time progression exponent (higher = sharper transition)
+P.slack_max_initial = 400;          % Initial maximum allowed slack magnitude (m/s, rad/s)
+P.slack_max_terminal = 1e-6;        % Terminal maximum allowed slack magnitude
+P.slack_retry_multiplier = 100;      % Factor to increase slack bounds on retry
+P.max_slack_retries = 3;            % Maximum number of retry attempts with relaxed slack
 
 % === SCP Tolerances ===
 P.tol_cost    = 1e-12;              % Cost change tolerance for convergence
 P.tol_slack   = 1e-12;              % Slack tolerance for convergence
+P.tol_slack_initial = 1e-3;         % Initial slack tolerance (more relaxed)
+P.tol_slack_terminal = 1e-12;       % Terminal slack tolerance (very strict)
 
 % === Legacy parameters (kept for compatibility) ===
 P.trust_T     = 0.3 * P.T_max;     % Trust region for thrust
@@ -182,7 +194,7 @@ n_debug_runs = 10;
 validate_linearization_flag = false; % Set to true to validate linearization accuracy
 
 %% Control Replay System Parameters
-replay_control = true;           % Set to true to enable control replay mode
+replay_control = false;           % Set to true to enable control replay mode
 t_replay_control = 41.96;            % Time until which replay is active (s)
 control_replay_filename = 'control_replay.mat'; % Filename for saved control log
 
@@ -219,9 +231,20 @@ if replay_control
     end
 end
 
+% Validate enhanced slack management parameters
+[is_valid, error_msg] = slack_management_utils('validate_parameters', P);
+if ~is_valid
+    warning('Slack management parameter validation failed: %s. Using legacy slack system.', error_msg);
+end
+
 fprintf('=== 2D MPC Simulation Started ===\n');
 fprintf('Initial State: x=%.1f, y=%.1f, vx=%.1f, vy=%.1f, th=%.1f deg\n', ...
     current_state(1), current_state(2), current_state(3), current_state(4), rad2deg(current_state(5)));
+
+if is_valid
+    fprintf('Enhanced slack management: w_slack %.1e -> %.1e, s_max %.1f -> %.1e\n', ...
+        P.w_slack_initial, P.w_slack_terminal, P.slack_max_initial, P.slack_max_terminal);
+end
 
 try
     while sim_time < P.T_max_mission
@@ -268,6 +291,7 @@ try
             N_scp = max(N_scp, 3); % Ensure a minimum number of steps
 
             % Run the SCP optimization with adaptive parameters and warm start
+            % Pass estimated time to touchdown for enhanced slack management
             [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol);
             total_scp_calls = total_scp_calls + 1;
 

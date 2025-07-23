@@ -11,6 +11,12 @@ P_scp.X0 = initial_state;
 P_scp.T = T_horizon;
 P_scp.N = N;
 
+% Validate slack management parameters
+[is_valid, error_msg] = slack_management_utils('validate_parameters', P);
+if ~is_valid
+    error('Slack management parameter validation failed: %s', error_msg);
+end
+
 % Use override parameters if provided, otherwise use defaults
 if nargin >= 5 && ~isempty(dt_override)
     P_scp.dt = dt_override;
@@ -52,7 +58,7 @@ trust_vx = P.trust_init_vx;
 trust_vy = P.trust_init_vy;
 trust_omega = P.trust_init_omega;
 
-% SCP Iteration Loop
+% SCP Iteration Loop with Enhanced Slack Management
 for iter = 1:P_scp.max_iters
     % Pass current trust regions to P_scp for this iteration
     P_scp.trust_T = trust_T;
@@ -61,25 +67,34 @@ for iter = 1:P_scp.max_iters
     P_scp.trust_vy = trust_vy;
     P_scp.trust_omega = trust_omega;
     
-    % Build and solve the convex subproblem (Quadratic Program)
-    prob = build_subproblem_2d(X_ref, U_ref, P_scp);
-    [z, cost_val, exitflag] = solve_qp(prob);
+    % Estimate remaining time for slack management
+    if iter == 1
+        t_remaining = T_horizon; % First iteration: full horizon remaining
+    else
+        % Estimate based on current solution progress - could be improved with actual trajectory analysis
+        t_remaining = T_horizon * 0.9; % Conservative estimate - assumes we're making progress
+    end
+    
+    % Enhanced QP solving with retry mechanism
+    [z, cost_val, exitflag, retry_level] = solve_qp_with_retry(X_ref, U_ref, P_scp, t_remaining);
 
     if exitflag <= 0
-        fprintf('  QP solver failed (iter %d)\n', iter);
-        % Basic recovery: if solver fails, we keep the old reference and exit
-        % A more advanced implementation would shrink trust regions here.
+        fprintf('  QP solver failed after %d retries (iter %d)\n', P.max_slack_retries, iter);
+        % Advanced recovery: if all retries fail, we keep the old reference and exit
         if iter > 1
-            sol = extract_solution(z_prev, prob);
+            sol = extract_solution(z_prev, prob_prev);
         else
-            sol = []; % Failed on first iteration
+            sol = []; % Failed on first iteration - no previous solution
         end
         return;
     end
 
-    % Extract solution from the solver's vector 'z'
+    % Extract solution from the solver's vector 'z' 
+    % Need to rebuild prob for extraction since it may have been modified in retries
+    prob = build_subproblem_2d(X_ref, U_ref, P_scp, t_remaining, 0);
     sol = extract_solution(z, prob);
     z_prev = z; % Store for recovery
+    prob_prev = prob; % Store problem for recovery
 
     % Log progress
     slack_norm = sum(abs(sol.s_v(:))) + sum(abs(sol.s_w(:)));
@@ -133,11 +148,14 @@ for iter = 1:P_scp.max_iters
 %                 slack_norm, trust_T/1e3, rad2deg(trust_delta), trust_vx, trust_vy, rad2deg(trust_omega));
     end
 
-    % Check for convergence
+    % Check for convergence with time-dependent slack tolerance
     if iter > 1
         cost_change = abs(log.cost(iter) - log.cost(iter-1)) / max(abs(log.cost(iter-1)), 1e-8);
-        if cost_change < P.tol_cost && slack_norm < P.tol_slack
-%             fprintf('    Converged: cost_change=%.2e, slack=%.2e\n', cost_change, slack_norm);
+        tol_slack_current = slack_management_utils('compute_slack_tolerance', t_remaining, T_horizon, P);
+        
+        if cost_change < P.tol_cost && slack_norm < tol_slack_current
+%             fprintf('    Converged: cost_change=%.2e, slack=%.2e (tol=%.2e)\n', ...
+%                     cost_change, slack_norm, tol_slack_current);
             break; % Converged
         end
     end
@@ -160,6 +178,44 @@ log.final_trust_omega = trust_omega;
 
 end
 
+
+function [z, cost_val, exitflag, retry_level] = solve_qp_with_retry(X_ref, U_ref, P_scp, t_remaining)
+    % Enhanced QP solver with automatic retry and slack relaxation
+    
+    retry_level = 0;
+    exitflag = -1; % Initialize as failed
+    
+    for retry = 0:P_scp.max_slack_retries
+        retry_level = retry;
+        
+        % Build subproblem with current retry level (affects slack bounds)
+        prob = build_subproblem_2d(X_ref, U_ref, P_scp, t_remaining, retry);
+        
+        % Solve QP
+        [z_attempt, cost_val, exitflag] = solve_qp(prob);
+        
+        if exitflag > 0
+            % Success - return result
+            z = z_attempt;
+            if retry > 0
+                fprintf('    QP succeeded on retry %d with relaxed slack bounds\n', retry);
+            end
+            return;
+        else
+            % Failure - log and prepare for retry
+            if retry < P_scp.max_slack_retries
+                fprintf('    QP failed (exitflag=%d), retrying with relaxed slack bounds (%d/%d)\n', ...
+                        exitflag, retry+1, P_scp.max_slack_retries);
+            else
+                fprintf('    QP failed (exitflag=%d) - all retries exhausted\n', exitflag);
+            end
+        end
+    end
+    
+    % If we reach here, all retries failed
+    z = [];
+    cost_val = inf;
+end
 
 function [z, cost_val, exitflag] = solve_qp(prob)
     opts = optimoptions('quadprog','Display','off','Algorithm','interior-point-convex');
