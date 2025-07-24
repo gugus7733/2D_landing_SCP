@@ -147,9 +147,6 @@ else
     end
     
     fig_val = fh_val;
-    if isprop(fh_val, 'Parent') && ~isempty(fh_val.Parent)
-        fig_val = fh_val.Parent;
-    end
     
     TL_val = tiledlayout(fig_val, 4, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(TL_val, 'Linear vs Nonlinear Dynamics Comparison');
@@ -260,9 +257,6 @@ else
     end
     
     fig_val2 = fh_val2;
-    if isprop(fh_val2, 'Parent') && ~isempty(fh_val2.Parent)
-        fig_val2 = fh_val2.Parent;
-    end
     
     TL_val2 = tiledlayout(fig_val2, 4, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(TL_val2, 'Key Derived States Comparison (Linear vs Nonlinear)');

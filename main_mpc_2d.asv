@@ -85,11 +85,11 @@ P = struct();
 
 % === Simulation & Horizon ===
 P.dt_sim        = 0.01;              % Simulation timestep (s)
-P.dt_scp        = 0.2;               % SCP optimization timestep (s)
-P.max_iters_scp = 1;
+P.dt_scp        = 0.5;               % SCP optimization timestep (s)
+P.max_iters_scp = 3;
 P.fine_computation_time = 2.0;     % s, time before touchdown to switch to fine computation
-P.fine_computation_dt = 0.1;      % s, fine SCP dt (much smaller timestep)
-P.fine_computation_n_iter = 3;     % fine SCP max iterations (more iterations for accuracy)
+P.fine_computation_dt = 0.5;      % s, fine SCP dt (much smaller timestep)
+P.fine_computation_n_iter = 1;     % fine SCP max iterations (more iterations for accuracy)
 P.T_max_mission = 50;               % Max mission time (s)
 P.min_horizon_time = 2*P.fine_computation_dt;            % Minimum SCP horizon time (s)
 
@@ -124,12 +124,12 @@ P.omega_target = 0;
 % === Propulsion ===
 P.T_min       = 0.2 * 934e3;       % N, minimum thrust (approx. 1 Merlin engine)
 P.T_max       = 1e6;             % N, maximum thrust
-P.delta_max   = deg2rad(30.0);      % rad, max gimbal angle
+P.delta_max   = deg2rad(8.0);      % rad, max gimbal angle
 P.Isp         = 282;               % s, specific impulse
 
 % === Aerodynamics ===
 P.Cd          = 0.8;               % Axial drag coefficient (approx.)
-P.C_N_alpha   = 5;               % Normal force coeff. derivative (per rad)
+P.C_N_alpha   = 3.5;               % Normal force coeff. derivative (per rad)
 P.A_ref       = 10.8;              % m^2, reference area (diameter 3.7m)
 P.C_damp      = 1e7;               % Aerodynamic damping coefficient (set >0 to enable damping)
 
@@ -190,18 +190,13 @@ P.trust_delta = deg2rad(10);       % Trust region for gimbal
 
 %% Debug & Validation Options
 isDebug = false;
-n_debug_runs = 1;
+n_debug_runs = 10;
 validate_linearization_flag = false; % Set to true to validate linearization accuracy
 
 %% Control Replay System Parameters
-replay_control = false;           % Set to true to enable control replay mode
+replay_control = true;           % Set to true to enable control replay mode
 t_replay_control = 25;            % Time until which replay is active (s)
 control_replay_filename = 'control_replay.mat'; % Filename for saved control log
-
-%% Open-Loop Control Verification Parameters
-open_loop = true;                % Set to true to enable open-loop verification mode
-t_open_loop = 1;              % Time to switch to open-loop control (s)
-open_loop_horizon_limit = [];     % Max commands to use (empty = all available)
 
 
 %% MPC Simulation Loop
@@ -216,15 +211,6 @@ sim_time = 0;
 
 % Initialize control logging for crash recovery
 control_log = control_replay_utils('initialize');
-
-% Initialize open-loop control system
-open_loop_active = false;
-open_loop_control_sequence = [];
-open_loop_dt_sequence = [];
-open_loop_command_index = 1;
-open_loop_predicted_trajectory = [];
-open_loop_start_time = [];
-open_loop_achieved_trajectory = struct('t', [], 'X', []);
 
 % Initialize replay control system if enabled
 replay_log = [];
@@ -268,29 +254,13 @@ try
             break;
         end
 
-        % --- Determine Control: Replay, Open-Loop, or SCP ---
+        % --- Determine Control: Replay or SCP ---
         if replay_control && sim_time < t_replay_control
             % Use replay control
             [T_applied, delta_applied] = control_replay_utils('get_replay_control', replay_log, sim_time);
             fprintf('\nt=%.2f s: Using replay control (T=%.0f N, delta=%.2f deg)\n', ...
                 sim_time, T_applied, rad2deg(delta_applied));
             dt_scp_current = P.dt_scp; % Use standard timestep for replay
-        elseif open_loop_active
-            % Use open-loop control from captured sequence
-            if open_loop_command_index <= size(open_loop_control_sequence, 2)
-                T_applied = open_loop_control_sequence(1, open_loop_command_index);
-                delta_applied = open_loop_control_sequence(2, open_loop_command_index);
-                dt_scp_current = open_loop_dt_sequence(open_loop_command_index);
-                fprintf('\nt=%.2f s: Open-loop control [%d/%d] (T=%.0f N, delta=%.2f deg, dt=%.3f s)\n', ...
-                    sim_time, open_loop_command_index, size(open_loop_control_sequence, 2), ...
-                    T_applied, rad2deg(delta_applied), dt_scp_current);
-                open_loop_command_index = open_loop_command_index + 1;
-            else
-                % No more open-loop commands available
-                fprintf('\n*** OPEN-LOOP COMMANDS EXHAUSTED at t=%.2f s ***\n', sim_time);
-                fprintf('Applied %d commands from captured sequence\n', size(open_loop_control_sequence, 2));
-                break; % End simulation
-            end
         else
             % Use SCP optimization
             if replay_control && sim_time >= t_replay_control
@@ -298,66 +268,8 @@ try
                 replay_control = false; % Disable replay for remaining simulation
             end
             
-            % Check if we should switch to open-loop mode
-            if open_loop && sim_time >= t_open_loop && ~open_loop_active
-                fprintf('\n*** SWITCHING TO OPEN-LOOP MODE at t=%.2f s ***\n', sim_time);
-                if ~isempty(last_scp_sol)
-                    % Capture the current SCP solution for open-loop execution
-                    open_loop_control_sequence = last_scp_sol.U;
-                    
-                    % Store the predicted trajectory for comparison
-                    open_loop_predicted_trajectory = last_scp_sol.X;
-                    open_loop_start_time = sim_time;
-                    
-                    % Determine timesteps for each command based on current SCP mode
-                    if T_est <= P.fine_computation_time
-                        dt_for_sequence = P.fine_computation_dt;
-                    else
-                        dt_for_sequence = P.dt_scp;
-                    end
-                    
-                    % Create timestep sequence
-                    n_commands = size(open_loop_control_sequence, 2);
-                    if isempty(open_loop_horizon_limit)
-                        commands_to_use = n_commands;
-                    else
-                        commands_to_use = min(n_commands, open_loop_horizon_limit);
-                    end
-                    
-                    open_loop_control_sequence = open_loop_control_sequence(:, 1:commands_to_use);
-                    open_loop_dt_sequence = repmat(dt_for_sequence, 1, commands_to_use);
-                    open_loop_predicted_trajectory = open_loop_predicted_trajectory(:, 1:commands_to_use+1);
-                    
-                    fprintf('Captured SCP solution: %d commands, dt=%.3f s each\n', ...
-                            commands_to_use, dt_for_sequence);
-                    fprintf('Total open-loop horizon: %.2f s\n', commands_to_use * dt_for_sequence);
-                    
-                    open_loop_active = true;
-                    open_loop_command_index = 1;
-                    
-                    % Initialize achieved trajectory with current state
-                    open_loop_achieved_trajectory.t = sim_time;
-                    open_loop_achieved_trajectory.X = current_state;
-                    
-                    % Apply first open-loop command immediately
-                    T_applied = open_loop_control_sequence(1, 1);
-                    delta_applied = open_loop_control_sequence(2, 1);
-                    dt_scp_current = open_loop_dt_sequence(1);
-                    fprintf('t=%.2f s: Open-loop control [1/%d] (T=%.0f N, delta=%.2f deg, dt=%.3f s)\n', ...
-                        sim_time, commands_to_use, T_applied, rad2deg(delta_applied), dt_scp_current);
-                    open_loop_command_index = 2;
-                else
-                    fprintf('Warning: No SCP solution available for open-loop mode. Continuing with SCP.\n');
-                    open_loop = false; % Disable open-loop mode
-                end
-            end
-            
-            % Skip SCP if we just switched to open-loop mode
-            if open_loop_active && sim_time >= t_open_loop
-                % Controls already set above, skip SCP computation
-            else
-                % Estimate time to touchdown to set optimization horizon
-                [T_est, T_horizon] = estimate_time_to_touchdown(current_state, P);
+            % Estimate time to touchdown to set optimization horizon
+            [T_est, T_horizon] = estimate_time_to_touchdown(current_state, P);
             
             % Check if we're in fine computation phase (close to landing)
             if T_est <= P.fine_computation_time
@@ -399,10 +311,9 @@ try
                 debug_specific_linearization_issues(scp_sol.X, scp_sol.U, current_state, T_horizon, N_scp, P);
             end
 
-                % Apply first optimal control from the SCP solution
-                T_applied = last_scp_sol.U(1,1);
-                delta_applied = last_scp_sol.U(2,1);
-            end
+            % Apply first optimal control from the SCP solution
+            T_applied = last_scp_sol.U(1,1);
+            delta_applied = last_scp_sol.U(2,1);
         end
         
         % Log control for crash recovery
@@ -457,12 +368,6 @@ try
             sim_time = sim_time + P.dt_sim;
         end
         current_state = temp_state;
-        
-        % Record achieved trajectory during open-loop mode
-        if open_loop_active
-            open_loop_achieved_trajectory.t(end+1) = sim_time;
-            open_loop_achieved_trajectory.X(:,end+1) = current_state;
-        end
 
 %         fprintf('  State update: x=%.1f, y=%.1f, vx=%.1f, vy=%.1f, th=%.1f deg\n',...
 %             current_state(1), current_state(2), current_state(3), current_state(4), rad2deg(current_state(5)));
@@ -490,31 +395,12 @@ catch ME
     fprintf('Crash trajectory saved. Set replay_control=true and t_replay_control=%.2f to replay until crash.\n', sim_time);
     
     % Re-throw error to allow debugging if needed
-    rethrow(ME);
+%     rethrow(ME);
 end
 
 fprintf('\n=== MPC Simulation Complete ===\n');
 fprintf('Total time: %.2f s\n', sim_time);
 fprintf('Total SCP calls: %d\n', total_scp_calls);
-
-% Open-loop mode summary
-if open_loop_active || (open_loop && sim_time >= t_open_loop)
-    if ~isempty(open_loop_control_sequence)
-        commands_applied = open_loop_command_index - 1;
-        total_commands = size(open_loop_control_sequence, 2);
-        fprintf('=== OPEN-LOOP VERIFICATION SUMMARY ===\n');
-        fprintf('Open-loop started at: t=%.2f s\n', t_open_loop);
-        fprintf('Commands applied: %d/%d\n', commands_applied, total_commands);
-        if commands_applied < total_commands
-            fprintf('Reason for termination: Landing or mission time limit\n');
-        else
-            fprintf('Reason for termination: All open-loop commands exhausted\n');
-        end
-        fprintf('Open-loop duration: %.2f s (%.2f s planned)\n', ...
-                sim_time - t_open_loop, total_commands * open_loop_dt_sequence(1));
-    end
-end
-
 fprintf('Final state: x=%.2f, y=%.2f, vx=%.2f, vy=%.2f, th=%.2f, w=%.2f\n',...
     current_state(1), current_state(2), current_state(3), current_state(4),...
     rad2deg(current_state(5)), rad2deg(current_state(6)));
@@ -528,21 +414,10 @@ if ~isempty(control_log.t)
 end
 
 %% Visualizations
-
-if (~isDebug)
-    visualize_results_2d(sim_history, P, fm);
-end
+visualize_results_2d(sim_history, P, fm);
 
 % Interactive trajectory plot
 plot_interactive_trajectory_2d(sim_history, P, fm);
-
-% Open-loop trajectory comparison plot
-if open_loop_active || (open_loop && sim_time >= t_open_loop)
-    if ~isempty(open_loop_predicted_trajectory) && ~isempty(open_loop_achieved_trajectory.X)
-        plot_open_loop_comparison(open_loop_predicted_trajectory, open_loop_achieved_trajectory, ...
-                                 open_loop_start_time, open_loop_dt_sequence, P, fm);
-    end
-end
 
 % Add SCP convergence analysis plots
 % fprintf('\nGenerating SCP convergence analysis...\n');

@@ -17,8 +17,7 @@ n_iters = length(scp_log.cost);
 iter_vec = 1:n_iters;
 
 %% Main SCP Convergence Analysis Figure
-fh = fm.newFigure('SCP_Convergence_Analysis');
-fig = fh.Parent;
+fig = fm.newFigure('SCP_Convergence_Analysis');
 TL = tiledlayout(fig, 3, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
 title(TL, sprintf('SCP Convergence Analysis (t=%.2f s, %d iterations)', sim_time, n_iters));
 
@@ -154,8 +153,7 @@ end
 
 %% Solution Quality Analysis (if solution exists)
 if ~isempty(scp_sol)
-    fh2 = fm.newFigure('SCP_Solution_Analysis');
-    fig2 = fh2.Parent;
+    fig2 = fm.newFigure('SCP_Solution_Analysis');
     TL2 = tiledlayout(fig2, 2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(TL2, sprintf('SCP Solution Quality (t=%.2f s)', sim_time));
     

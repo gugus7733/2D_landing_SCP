@@ -48,8 +48,7 @@ for i = 1:n_scp_calls
 end
 
 %% Main Summary Figure
-fh = fm.newFigure('SCP_Summary_All_Calls');
-fig = fh.Parent;
+fig = fm.newFigure('SCP_Summary_All_Calls');
 TL = tiledlayout(fig, 3, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
 title(TL, sprintf('SCP Performance Summary (%d calls)', n_scp_calls));
 

@@ -33,6 +33,7 @@ This allows much more readable equations, which is opposite to the more classica
 - Parameters are passed explicitly through the call chain - no global access or default fallbacks
 - State vectors should be managed through state_manager_2d() utility functions when possible
 - All console output (fprintf) should be removed from core functions - use logging structures instead
+- Avoid using fprintf at all costs !
 
 
 ## Project Overview
