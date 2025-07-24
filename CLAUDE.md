@@ -34,6 +34,9 @@ This allows much more readable equations, which is opposite to the more classica
 - State vectors should be managed through state_manager_2d() utility functions when possible
 - All console output (fprintf) should be removed from core functions - use logging structures instead
 - Avoid using fprintf at all costs !
+- Trust regions should persist between successive SCP calls for improved convergence
+- Reference trajectories must be properly time-shifted using actual elapsed time, not assumed timesteps
+- Mode transitions (normal ↔ fine computation) require special handling to maintain trajectory continuity
 
 
 ## Project Overview

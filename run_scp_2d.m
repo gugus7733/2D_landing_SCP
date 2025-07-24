@@ -1,9 +1,12 @@
-function [sol, log] = run_scp_2d(initial_state, T_horizon, N, P, dt_override, max_iters_override, prev_sol)
+function [sol, log] = run_scp_2d(initial_state, T_horizon, N, P, dt_override, max_iters_override, prev_sol, sim_time)
 %RUN_SCP_2D Solves the 2D rocket landing problem using SCP.
 %
 % This function initializes a reference trajectory and then iteratively
 % linearizes the dynamics and solves a convex subproblem (QP) to find an
 % optimal state-control trajectory.
+%
+% INPUTS:
+%   sim_time    - Current simulation time for accurate slack management (optional)
 
 % SCP Parameters
 P_scp = P;
@@ -37,8 +40,12 @@ P_scp.n_controls = 2;
 % Initialize reference trajectory with warm start
 if nargin >= 7 && ~isempty(prev_sol)
     % Warm start: use previous solution shifted forward in time
-    % Pass both the previous solution and applied timestep information
-    dt_applied = P.dt_scp;  % Timestep that was actually applied in simulation
+    % Extract actual applied timestep from previous solution (more accurate)
+    if isfield(prev_sol, 'P_scp') && isfield(prev_sol.P_scp, 'dt')
+        dt_applied = prev_sol.P_scp.dt;
+    else
+        dt_applied = P.dt_scp; % Fallback
+    end
     [X_ref, U_ref] = get_initial_reference_2d(P_scp, prev_sol, dt_applied);
 else
     % Cold start: generate initial reference from scratch
@@ -51,12 +58,22 @@ log = struct('cost',[], 'slack',[], 'thrust_mean',[], 'thrust_max',[], 'gimbal_r
             'slack_vx',[], 'slack_vy',[], 'slack_omega',[], 'qp_exitflag',[]);
 sol = [];
 
-% Initialize trust regions (adaptive from main script parameters)
-trust_T = P.trust_init_T;
-trust_delta = P.trust_init_delta;
-trust_vx = P.trust_init_vx;
-trust_vy = P.trust_init_vy;
-trust_omega = P.trust_init_omega;
+% Initialize trust regions with persistence from previous solution
+if nargin >= 7 && ~isempty(prev_sol) && isfield(prev_sol, 'trust_regions')
+    % Use trust regions from previous solution (warm start)
+    trust_T = prev_sol.trust_regions.T;
+    trust_delta = prev_sol.trust_regions.delta;
+    trust_vx = prev_sol.trust_regions.vx;
+    trust_vy = prev_sol.trust_regions.vy;
+    trust_omega = prev_sol.trust_regions.omega;
+else
+    % Initialize trust regions from parameters (cold start)
+    trust_T = P.trust_init_T;
+    trust_delta = P.trust_init_delta;
+    trust_vx = P.trust_init_vx;
+    trust_vy = P.trust_init_vy;
+    trust_omega = P.trust_init_omega;
+end
 
 % SCP Iteration Loop with Enhanced Slack Management
 for iter = 1:P_scp.max_iters
@@ -67,12 +84,30 @@ for iter = 1:P_scp.max_iters
     P_scp.trust_vy = trust_vy;
     P_scp.trust_omega = trust_omega;
     
-    % Estimate remaining time for slack management
-    if iter == 1
-        t_remaining = T_horizon; % First iteration: full horizon remaining
+    % Calculate remaining time for slack management
+    if nargin >= 8 && ~isempty(sim_time)
+        % Use actual simulation time for accurate calculation
+        if isfield(P, 'T_max_mission')
+            t_remaining = P.T_max_mission - sim_time;
+        else
+            % Estimate time to touchdown from current state
+            altitude = initial_state(2);
+            vy = initial_state(4);
+            if vy < -1.0 && altitude > 0
+                t_est_touchdown = altitude / abs(vy);
+                t_remaining = min(T_horizon, t_est_touchdown);
+            else
+                t_remaining = T_horizon;
+            end
+        end
+        t_remaining = max(t_remaining, 0.1); % Ensure positive value
     else
-        % Estimate based on current solution progress - could be improved with actual trajectory analysis
-        t_remaining = T_horizon * 0.9; % Conservative estimate - assumes we're making progress
+        % Fallback to horizon-based estimation
+        if iter == 1
+            t_remaining = T_horizon;
+        else
+            t_remaining = T_horizon * 0.8; % More conservative than before
+        end
     end
     
     % Enhanced QP solving with retry mechanism
@@ -169,12 +204,18 @@ if iter == P_scp.max_iters
 %     fprintf('  Warning: SCP reached max iterations (%d).\n', P_scp.max_iters);
 end
 
-% Store final trust region values for inspection
+% Store final trust region values in log for inspection
 log.final_trust_T = trust_T;
 log.final_trust_delta = trust_delta;
 log.final_trust_vx = trust_vx;
 log.final_trust_vy = trust_vy;
 log.final_trust_omega = trust_omega;
+
+% Store trust regions in solution for persistence between SCP calls
+if ~isempty(sol)
+    sol.trust_regions = struct('T', trust_T, 'delta', trust_delta, ...
+                              'vx', trust_vx, 'vy', trust_vy, 'omega', trust_omega);
+end
 
 end
 

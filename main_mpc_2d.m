@@ -199,7 +199,7 @@ t_replay_control = 25;            % Time until which replay is active (s)
 control_replay_filename = 'control_replay.mat'; % Filename for saved control log
 
 %% Open-Loop Control Verification Parameters
-open_loop = true;                % Set to true to enable open-loop verification mode
+open_loop = false;                % Set to true to enable open-loop verification mode
 t_open_loop = 1;              % Time to switch to open-loop control (s)
 open_loop_horizon_limit = [];     % Max commands to use (empty = all available)
 
@@ -359,18 +359,31 @@ try
                 % Estimate time to touchdown to set optimization horizon
                 [T_est, T_horizon] = estimate_time_to_touchdown(current_state, P);
             
+            % Detect mode transitions for better reference trajectory handling
+            previous_fine_mode = false;
+            if ~isempty(last_scp_sol) && isfield(last_scp_sol, 'P_scp')
+                previous_fine_mode = (last_scp_sol.P_scp.dt <= P.fine_computation_dt * 1.1);
+            end
+            
             % Check if we're in fine computation phase (close to landing)
             if T_est <= P.fine_computation_time
                 % Fine computation: smaller timestep, more iterations
                 dt_scp_current = P.fine_computation_dt;
                 max_iters_current = P.fine_computation_n_iter;
-                fprintf('\n*** FINE COMPUTATION MODE ACTIVATED ***\n');
+                
+                if ~previous_fine_mode
+                    fprintf('\n*** FINE COMPUTATION MODE ACTIVATED ***\n');
+                end
                 fprintf('t=%.2f s: Fine SCP (dt=%.3f s, max_iters=%d, Horizon=%.2f s)\n', ...
                     sim_time, dt_scp_current, max_iters_current, T_horizon);
             else
                 % Normal computation: standard timestep, fewer iterations  
                 dt_scp_current = P.dt_scp;
                 max_iters_current = P.max_iters_scp;
+                
+                if previous_fine_mode
+                    fprintf('\n*** RETURNING TO NORMAL COMPUTATION MODE ***\n');
+                end
                 fprintf('\nt=%.2f s: Normal SCP (dt=%.3f s, max_iters=%d, Horizon=%.2f s)\n', ...
                     sim_time, dt_scp_current, max_iters_current, T_horizon);
             end
@@ -379,8 +392,8 @@ try
             N_scp = max(N_scp, 3); % Ensure a minimum number of steps
 
             % Run the SCP optimization with adaptive parameters and warm start
-            % Pass estimated time to touchdown for enhanced slack management
-            [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol);
+            % Pass simulation time for enhanced slack management
+            [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
             total_scp_calls = total_scp_calls + 1;
 
             if isempty(scp_sol)
