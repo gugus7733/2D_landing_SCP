@@ -23,7 +23,7 @@ Please respect these rules as much as possible.
 - Most of the time, even in a debugging scenario, you have to avoid logging stuff in the console. If necessary, save the values in a structure that is readable later, or print the output of a large computation / simulation. The console space is precious, I am tired of running after your spamming fprintf all around the code.
 - Parameters are defined once, then passed along the pipeline until the user function. Assume the user function will always receive its arguments. Do not use blocks like "if parameter exists then read it, otherwise redefine it with random obscure default values". Just use the damn interface that is well defined and tracable.
 - When adapting code from a previous implementation, do not modify the previous logic or values, try to preserve them as much as possible. Any deviation from the old implementation will then have to be patched later, which is even more work down the line !
-
+- Again, I insist : Do not add any fprintf to the code. Even in an error handling situation, if the code crashes then it will be investigated, spamming the console won't help. I don't know if threatening a LLM works, but if you keep putting them all over the place, I'm gonna find you and unplug you. This will be a very bad outcome.
 
 # Additionnal good practices and code formalism : 
 - Function parameters should be documented with clear INPUTS/OUTPUTS sections
@@ -31,10 +31,9 @@ Please respect these rules as much as possible.
 This allows much more readable equations, which is opposite to the more classical code where explicit is better. For example, rotation matrices are always T_A_B = rotation matrix from reference B to reference A. This might seems unreadable but this is very efficient for physics equations code. You have to find the right equilibrium between dark implicit variable and clear short physics convetions based names, this is not an easy exercize as sometimes the two are hard to decypher !
 - Parameter name consistency must be maintained across all functions
 - Parameters are passed explicitly through the call chain - no global access or default fallbacks
-- State vectors should be managed through state_manager_2d() utility functions when possible
 - All console output (fprintf) should be removed from core functions - use logging structures instead
 - Avoid using fprintf at all costs !
-- Trust regions should persist between successive SCP calls for improved convergence
+- Trust regions, slack, timestep, etc, should persist between successive SCP calls 
 - Reference trajectories must be properly time-shifted using actual elapsed time, not assumed timesteps
 - Mode transitions (normal ↔ fine computation) require special handling to maintain trajectory continuity
 
@@ -100,8 +99,6 @@ Replay parameters in `main_mpc_2d.m`:
 - `validate_linearization.m` - Linearization accuracy validation
 - `computeInitialSlope.m` - Initial attitude computation
 
-Legacy folder contains the files from an older implementation. Do not modify these files.
-You can draw inspiration from them for the implementation.
 
 
 

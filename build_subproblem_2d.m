@@ -61,17 +61,18 @@ H_ddelta = D' * D * P.w_ddelta;
 H(u_idx(1,:), u_idx(1,:)) = H(u_idx(1,:), u_idx(1,:)) + H_dT;
 H(u_idx(2,:), u_idx(2,:)) = H(u_idx(2,:), u_idx(2,:)) + H_ddelta;
 
-% Enhanced slack variable penalty (time-dependent L1 norm)
-if isfield(P, 'w_slack_initial') && isfield(P, 'w_slack_terminal')
-    % Use enhanced slack management
-    w_slack_current = slack_management_utils('compute_slack_weight', t_remaining, P.T, P);
-    f(prob.idx.s_v) = w_slack_current;
-    f(prob.idx.s_w) = w_slack_current;
-else
-    % Fallback to legacy constant weight
-    f(prob.idx.s_v) = P.w_slack;
-    f(prob.idx.s_w) = P.w_slack;
+% Angular velocity magnitude penalty
+if P.w_omega > 0
+    x_indices = reshape(prob.idx.X, n_x, N+1);
+    omega_idx = x_indices(6, :);  % ω is 6th state at all time points
+    H(omega_idx, omega_idx) = H(omega_idx, omega_idx) + P.w_omega * speye(N+1);
 end
+
+% Enhanced slack variable penalty (time-dependent L1 norm)
+% Use enhanced slack management
+w_slack_current = slack_management_utils('compute_slack_weight', t_remaining, P.T, P);
+f(prob.idx.s_v) = w_slack_current;
+f(prob.idx.s_w) = w_slack_current;
 
 % Large penalty for constraint violation slacks (active only in first 2 iterations)
 constraint_slack_penalty = 1e6; % Very large penalty to discourage use

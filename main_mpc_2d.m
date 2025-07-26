@@ -85,9 +85,10 @@ P = struct();
 
 % === Simulation & Horizon ===
 P.dt_sim        = 0.01;              % Simulation timestep (s)
+P.N_scp_steps_open_loop = 30;         % Number of dt_scp steps to apply in open loop before recomputing SCP (0 = classic MPC)
 P.dt_scp        = 0.2;               % SCP optimization timestep (s)
-P.max_iters_scp = 1;
-P.fine_computation_time = 2.0;     % s, time before touchdown to switch to fine computation
+P.max_iters_scp = 10;
+P.fine_computation_time = 0.0;     % s, time before touchdown to switch to fine computation
 P.fine_computation_dt = 0.1;      % s, fine SCP dt (much smaller timestep)
 P.fine_computation_n_iter = 3;     % fine SCP max iterations (more iterations for accuracy)
 P.T_max_mission = 50;               % Max mission time (s)
@@ -105,13 +106,13 @@ P.L_com_from_base = 0.4 * P.L_rocket; % Center of Mass location from base (m)
 P.L_cop_from_base = 0.8 * P.L_rocket; % Center of Pressure from base (m)
 
 % === Initial State [x, y, vx, vy, theta, omega, m]' ===
-P.x0      = 100;              % m, initial horizontal position
+P.x0      = -1000;              % m, initial horizontal position
 P.y0      = 5000;              % m, initial altitude
-P.vx0     = 5;              % m/s, initial horizontal velocity
-P.vy0     = -300;              % m/s, initial vertical velocity
-P.alpha0  = 5*d2r;            % rad, initial AoA
+P.vx0     = 100;              % m/s, initial horizontal velocity
+P.vy0     = -200;              % m/s, initial vertical velocity
+P.alpha0  = 15*d2r;            % rad, initial AoA
 P.theta0  = computeInitialSlope(P.alpha0, [P.vx0; P.vy0]);        % rad, initial pitch
-P.omega0  = deg2rad(10);        % rad/s, initial angular velocity
+P.omega0  = deg2rad(-20);        % rad/s, initial angular velocity
 
 % === Target State ===
 P.x_target     = 0;
@@ -136,59 +137,58 @@ P.C_damp      = 1e7;               % Aerodynamic damping coefficient (set >0 to 
 % === Environment ===
 P.g0          = 9.80665;           % m/s^2, standard gravity
 
-% === Trust Region Parameters (SCP Adaptive) ===
-% Control trust regions
-P.trust_init_T     = 1 * P.T_max;   % Initial trust in thrust change
-P.trust_init_delta = 1 * P.delta_max; % Initial trust in gimbal change
-P.trust_min_T      = 0.05 * P.T_max;   % Minimum trust region for thrust
-P.trust_max_T      = 1 * P.T_max;    % Maximum trust region for thrust
-P.trust_min_delta  = 0.05 * P.delta_max; % Minimum trust region for gimbal
-P.trust_max_delta  = 1.0 * P.delta_max;  % Maximum trust region for gimbal
-
-% State trust regions (matching 1D model approach)
-P.trust_init_vx    = 200;               % m/s trust for vx changes
-P.trust_init_vy    = 200;               % m/s trust for vy changes  
-P.trust_init_omega = deg2rad(90);      % rad/s trust for omega changes
-P.trust_min_vx     = 5;                % minimum vx trust region
-P.trust_max_vx     = 200;              % maximum vx trust region
-P.trust_min_vy     = 5;                % minimum vy trust region
-P.trust_max_vy     = 200;              % maximum vy trust region
-P.trust_min_omega  = deg2rad(1);       % minimum omega trust
-P.trust_max_omega  = deg2rad(90);      % maximum omega trust
-
-% Trust region adaptation
-P.trust_shrink     = 0.5;              % Trust region shrink factor
-P.trust_expand     = 1.25;             % Trust region expand factor
-P.slack_trigger    = 1e-3;             % Slack threshold for trust region adaptation
-
 % === Cost Weights & Penalties ===
 P.w_T         = 1e-10;              % Thrust magnitude penalty
 P.w_delta     = 0;              % Gimbal angle penalty
 P.w_dT        = 0;              % Thrust rate penalty
-P.w_ddelta    = 0;               % Gimbal rate penalty
-P.w_slack     = 1e6;               % Virtual control (slack) penalty - match 1D model
+P.w_ddelta    = 1e-1;               % Gimbal rate penalty
+P.w_omega     = 1e-4;               % Angular velocity penalty
+
+% === Trust Region Parameters (SCP Adaptive) ===
+% trust regions init
+P.trust_init_T     = 1 * P.T_max;   % Initial trust in thrust change
+P.trust_init_delta = 1 * P.delta_max; % Initial trust in gimbal change
+P.trust_init_vx    = 200;               % m/s trust for vx changes
+P.trust_init_vy    = 200;               % m/s trust for vy changes  
+P.trust_init_omega = deg2rad(90);      % rad/s trust for omega changes
+% trust regions bounds
+P.trust_min_T      = 0.5 * P.T_max;   % Minimum trust region for thrust
+P.trust_max_T      = 1 * P.T_max;    % Maximum trust region for thrust
+P.trust_min_delta  = 0.5 * P.delta_max; % Minimum trust region for gimbal
+P.trust_max_delta  = 1.0 * P.delta_max;  % Maximum trust region for gimbal
+P.trust_min_vx     = 50;                % minimum vx trust region
+P.trust_max_vx     = 200;              % maximum vx trust region
+P.trust_min_vy     = 50;                % minimum vy trust region
+P.trust_max_vy     = 200;              % maximum vy trust region
+P.trust_min_omega  = deg2rad(10);       % minimum omega trust
+P.trust_max_omega  = deg2rad(90);      % maximum omega trust
+
+% Trust region adaptation
+P.trust_shrink     = 0.9;              % Trust region shrink factor
+P.trust_expand     = 1.25;             % Trust region expand factor
+P.slack_trigger    = 1e-3;             % Slack threshold for trust region adaptation
 
 % === Enhanced Slack Management Parameters ===
-P.w_slack_initial = 1e-6;            % Initial slack weight (lower for early convergence)
-P.w_slack_terminal = 1e8;           % Terminal slack weight (high to force zero slack)
+P.w_slack_initial = 1e-6;           % Initial slack weight (lower for early convergence)
+P.w_slack_terminal = 1e6;           % Terminal slack weight (high to force zero slack)
 P.slack_decay_alpha = 2.0;          % Slack weight progression exponent
 P.slack_decay_beta = 3.0;           % Time progression exponent (higher = sharper transition)
 P.slack_max_initial = 400;          % Initial maximum allowed slack magnitude (m/s, rad/s)
-P.slack_max_terminal = 1e-6;        % Terminal maximum allowed slack magnitude
-P.slack_retry_multiplier = 100;      % Factor to increase slack bounds on retry
-P.max_slack_retries = 3;            % Maximum number of retry attempts with relaxed slack
+P.slack_max_terminal = 1e-1;        % Terminal maximum allowed slack magnitude
+P.slack_retry_multiplier = 100;     % Factor to increase slack bounds on retry
+P.max_slack_retries = 3;            % Maximum number of retry attempts with relaxed slack and trust
 
 % === SCP Tolerances ===
 P.tol_cost    = 1e-12;              % Cost change tolerance for convergence
 P.tol_slack   = 1e-12;              % Slack tolerance for convergence
-P.tol_slack_initial = 1e-3;         % Initial slack tolerance (more relaxed)
+P.tol_slack_initial = 1e-6;         % Initial slack tolerance (more relaxed)
 P.tol_slack_terminal = 1e-12;       % Terminal slack tolerance (very strict)
 
 % === Legacy parameters (kept for compatibility) ===
 P.trust_T     = 0.3 * P.T_max;     % Trust region for thrust
 P.trust_delta = deg2rad(10);       % Trust region for gimbal
 
-%% Debug & Validation Options
+%% Debug & Validation Options : true or false
 isDebug = false;
 n_debug_runs = 1;
 validate_linearization_flag = false; % Set to true to validate linearization accuracy
@@ -220,6 +220,14 @@ control_log = control_replay_utils('initialize');
 % Initialize open-loop control system
 open_loop_active = false;
 open_loop_control_sequence = [];
+
+% N-step open-loop execution state variables
+n_step_open_loop_active = false;
+n_step_control_sequence = [];
+n_step_dt_sequence = [];
+n_step_command_index = 1;
+n_step_remaining_steps = 0;
+last_scp_call_time = 0;
 open_loop_dt_sequence = [];
 open_loop_command_index = 1;
 open_loop_predicted_trajectory = [];
@@ -268,7 +276,7 @@ try
             break;
         end
 
-        % --- Determine Control: Replay, Open-Loop, or SCP ---
+        % --- Determine Control: Replay, Open-Loop Verification, N-Step Open-Loop, or SCP ---
         if replay_control && sim_time < t_replay_control
             % Use replay control
             [T_applied, delta_applied] = control_replay_utils('get_replay_control', replay_log, sim_time);
@@ -276,12 +284,12 @@ try
                 sim_time, T_applied, rad2deg(delta_applied));
             dt_scp_current = P.dt_scp; % Use standard timestep for replay
         elseif open_loop_active
-            % Use open-loop control from captured sequence
+            % Use open-loop verification control from captured sequence
             if open_loop_command_index <= size(open_loop_control_sequence, 2)
                 T_applied = open_loop_control_sequence(1, open_loop_command_index);
                 delta_applied = open_loop_control_sequence(2, open_loop_command_index);
                 dt_scp_current = open_loop_dt_sequence(open_loop_command_index);
-                fprintf('\nt=%.2f s: Open-loop control [%d/%d] (T=%.0f N, delta=%.2f deg, dt=%.3f s)\n', ...
+                fprintf('\nt=%.2f s: Open-loop verification [%d/%d] (T=%.0f N, delta=%.2f deg, dt=%.3f s)\n', ...
                     sim_time, open_loop_command_index, size(open_loop_control_sequence, 2), ...
                     T_applied, rad2deg(delta_applied), dt_scp_current);
                 open_loop_command_index = open_loop_command_index + 1;
@@ -290,6 +298,22 @@ try
                 fprintf('\n*** OPEN-LOOP COMMANDS EXHAUSTED at t=%.2f s ***\n', sim_time);
                 fprintf('Applied %d commands from captured sequence\n', size(open_loop_control_sequence, 2));
                 break; % End simulation
+            end
+        elseif n_step_open_loop_active && n_step_remaining_steps > 0
+            % Use N-step open-loop control from captured SCP sequence
+            T_applied = n_step_control_sequence(1, n_step_command_index);
+            delta_applied = n_step_control_sequence(2, n_step_command_index);
+            dt_scp_current = n_step_dt_sequence(n_step_command_index);
+            
+            % Update N-step counters
+            current_step = n_step_command_index - 1; % For logging (1-indexed)
+            total_steps = size(n_step_control_sequence, 2);
+            n_step_command_index = n_step_command_index + 1;
+            n_step_remaining_steps = n_step_remaining_steps - 1;
+            
+            % Check if N-step sequence is exhausted
+            if n_step_remaining_steps == 0
+                n_step_open_loop_active = false;
             end
         else
             % Use SCP optimization
@@ -359,68 +383,95 @@ try
                 % Estimate time to touchdown to set optimization horizon
                 [T_est, T_horizon] = estimate_time_to_touchdown(current_state, P);
             
-            % Detect mode transitions for better reference trajectory handling
-            previous_fine_mode = false;
-            if ~isempty(last_scp_sol) && isfield(last_scp_sol, 'P_scp')
-                previous_fine_mode = (last_scp_sol.P_scp.dt <= P.fine_computation_dt * 1.1);
-            end
-            
-            % Check if we're in fine computation phase (close to landing)
-            if T_est <= P.fine_computation_time
-                % Fine computation: smaller timestep, more iterations
-                dt_scp_current = P.fine_computation_dt;
-                max_iters_current = P.fine_computation_n_iter;
-                
-                if ~previous_fine_mode
-                    fprintf('\n*** FINE COMPUTATION MODE ACTIVATED ***\n');
+                % Detect mode transitions for better reference trajectory handling
+                previous_fine_mode = false;
+                if ~isempty(last_scp_sol) && isfield(last_scp_sol, 'P_scp')
+                    previous_fine_mode = (last_scp_sol.P_scp.dt <= P.fine_computation_dt * 1.1);
                 end
-                fprintf('t=%.2f s: Fine SCP (dt=%.3f s, max_iters=%d, Horizon=%.2f s)\n', ...
-                    sim_time, dt_scp_current, max_iters_current, T_horizon);
-            else
-                % Normal computation: standard timestep, fewer iterations  
-                dt_scp_current = P.dt_scp;
-                max_iters_current = P.max_iters_scp;
                 
-                if previous_fine_mode
-                    fprintf('\n*** RETURNING TO NORMAL COMPUTATION MODE ***\n');
+                % Check if we're in fine computation phase (close to landing)
+                if T_est <= P.fine_computation_time
+                    % Fine computation: smaller timestep, more iterations
+                    dt_scp_current = P.fine_computation_dt;
+                    max_iters_current = P.fine_computation_n_iter;
+                    
+                    if ~previous_fine_mode
+                        fprintf('\n*** FINE COMPUTATION MODE ACTIVATED ***\n');
+                    end
+                    fprintf('t=%.2f s: Fine SCP (dt=%.3f s, max_iters=%d, Horizon=%.2f s)\n', ...
+                        sim_time, dt_scp_current, max_iters_current, T_horizon);
+                else
+                    % Normal computation: standard timestep, fewer iterations  
+                    dt_scp_current = P.dt_scp;
+                    max_iters_current = P.max_iters_scp;
+                    
+                    if previous_fine_mode
+                        fprintf('\n*** RETURNING TO NORMAL COMPUTATION MODE ***\n');
+                    end
+                    fprintf('\nt=%.2f s: Normal SCP (dt=%.3f s, max_iters=%d, Horizon=%.2f s)\n', ...
+                        sim_time, dt_scp_current, max_iters_current, T_horizon);
                 end
-                fprintf('\nt=%.2f s: Normal SCP (dt=%.3f s, max_iters=%d, Horizon=%.2f s)\n', ...
-                    sim_time, dt_scp_current, max_iters_current, T_horizon);
-            end
-            
-            N_scp = round(T_horizon / dt_scp_current);
-            N_scp = max(N_scp, 3); % Ensure a minimum number of steps
-
-            % Run the SCP optimization with adaptive parameters and warm start
-            % Pass simulation time for enhanced slack management
-            if (sim_time == 0)
+                
+                N_scp = round(T_horizon / dt_scp_current);
+                N_scp = max(N_scp, 3); % Ensure a minimum number of steps
+    
+                % Run the SCP optimization with adaptive parameters and warm start
+                % Pass simulation time for enhanced slack management
+    %             if (sim_time == 0)
+    %                 [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
+    %             else
+    %                 [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
+    %             end
+                
                 [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
-            else
-                [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
-            end
-            total_scp_calls = total_scp_calls + 1;
-
-            if isempty(scp_sol)
-                scp_sol = last_scp_sol;
-                scp_log = last_scp_log;
-            else
-                fprintf('  SCP converged in %d iterations, max retries = %d. Cost: %.2e, Slack: %.2e\n', ...
-                    length(scp_log.cost), max(scp_log.retry_level), scp_log.cost(end), scp_log.slack(end));
-            end
-            
-            last_scp_sol = scp_sol;
-            last_scp_log = scp_log;
-            
-            % Validate linearization accuracy (only for first SCP call)
-            if validate_linearization_flag && total_scp_calls == 1
-                fprintf('\n--- LINEARIZATION VALIDATION ---\n');
-                validate_linearization(scp_sol.X, scp_sol.U, current_state, T_horizon, N_scp, P);
-                debug_specific_linearization_issues(scp_sol.X, scp_sol.U, current_state, T_horizon, N_scp, P);
-            end
-
-                % Apply first optimal control from the SCP solution
-                T_applied = last_scp_sol.U(1,1);
-                delta_applied = last_scp_sol.U(2,1);
+    
+                total_scp_calls = total_scp_calls + 1;
+    
+                if isempty(scp_sol)
+                    scp_sol = last_scp_sol;
+                    scp_log = last_scp_log;
+                else
+                    fprintf('  SCP converged in %d iterations, max retries = %d. Cost: %.2e, Slack: %.2e\n', ...
+                        length(scp_log.cost), max(scp_log.retry_level), scp_log.cost(end), scp_log.slack(end));
+                end
+                
+                last_scp_sol = scp_sol;
+                last_scp_log = scp_log;
+                
+                % Validate linearization accuracy (only for first SCP call)
+                if validate_linearization_flag && total_scp_calls == 1
+                    fprintf('\n--- LINEARIZATION VALIDATION ---\n');
+                    validate_linearization(scp_sol.X, scp_sol.U, current_state, T_horizon, N_scp, P);
+                    debug_specific_linearization_issues(scp_sol.X, scp_sol.U, current_state, T_horizon, N_scp, P);
+                end
+    
+                    % Apply first optimal control from the SCP solution
+                    T_applied = last_scp_sol.U(1,1);
+                    delta_applied = last_scp_sol.U(2,1);
+                    
+                    % Check if should activate N-step open-loop mode
+                    % Only activate if not in verification open-loop mode
+                    if P.N_scp_steps_open_loop > 0 && ~n_step_open_loop_active && ~open_loop_active
+                        % Determine how many steps to capture from SCP solution
+                        available_steps = size(last_scp_sol.U, 2);
+                        n_steps_to_capture = min(P.N_scp_steps_open_loop, available_steps);
+                        
+                        % Only activate if more than 1 step available (first step already applied above)
+                        if n_steps_to_capture > 1
+                            % Capture control sequence
+                            n_step_control_sequence = last_scp_sol.U(:, 1:n_steps_to_capture);
+                            
+                            % Create timestep sequence (timestep-agnostic)
+                            % Use consistent timestep from current SCP mode
+                            n_step_dt_sequence = repmat(dt_scp_current, 1, n_steps_to_capture);
+                            
+                            % Initialize N-step execution state
+                            n_step_remaining_steps = n_steps_to_capture - 1; % -1 because first step applied immediately
+                            n_step_command_index = 2; % Next step to apply (1 is already applied)
+                            n_step_open_loop_active = true;
+                            last_scp_call_time = sim_time;
+                        end
+                    end
             end
         end
         

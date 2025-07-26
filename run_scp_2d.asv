@@ -161,6 +161,11 @@ for iter = 1:P_scp.max_iters
         end
         
         % Apply trust region updates with clamping and safety checks
+        old_trust_T = trust_T;
+        old_trust_delta = trust_delta;
+        old_trust_vx = trust_vx;
+        old_trust_vy = trust_vy;
+        old_trust_omega = trust_omega;
         
         trust_T = max(P.trust_min_T, min(P.trust_max_T, trust_T * trust_update_factor));
         trust_delta = max(P.trust_min_delta, min(P.trust_max_delta, trust_delta * trust_update_factor));
@@ -169,12 +174,12 @@ for iter = 1:P_scp.max_iters
         trust_omega = max(P.trust_min_omega, min(P.trust_max_omega, trust_omega * trust_update_factor));
         
         % Log trust region changes for debugging
-%         fprintf('    Trust region changes: T: %.2e→%.2e, δ: %.2e→%.2e, vₓ: %.1f→%.1f, vᵧ: %.1f→%.1f, ω: %.3f→%.3f\n', ...
-%                 old_trust_T, trust_T, old_trust_delta, trust_delta, ...
-%                 old_trust_vx, trust_vx, old_trust_vy, trust_vy, ...
-%                 old_trust_omega, trust_omega);
-%         
-%             fprintf('  Merit ratio ρ=%.3f → %s trust regions (factor=%.1f)\n', merit_ratio, update_desc, trust_update_factor);
+        fprintf('    Trust region changes: T: %.2e→%.2e, δ: %.2e→%.2e, vₓ: %.1f→%.1f, vᵧ: %.1f→%.1f, ω: %.3f→%.3f\n', ...
+                old_trust_T, trust_T, old_trust_delta, trust_delta, ...
+                old_trust_vx, trust_vx, old_trust_vy, trust_vy, ...
+                old_trust_omega, trust_omega);
+        
+            fprintf('  Merit ratio ρ=%.3f → %s trust regions (factor=%.1f)\n', merit_ratio, update_desc, trust_update_factor);
     else
         merit_ratio = NaN; % Invalid for first iteration
         trust_update_factor = 1.0;
@@ -335,11 +340,11 @@ function [prob, z, cost_val, exitflag, retry_level] = solve_qp_with_retry(X_ref,
             P_scp.trust_vy = min(orig_trust_vy * retry_scale, max_vy);
             P_scp.trust_omega = min(orig_trust_omega * retry_scale, max_omega);
             
-%             fprintf('    Retry %d: widening trust regions by factor %.1f\n', retry, retry_scale);
-%             fprintf('      T: %.1e → %.1e, δ: %.1e → %.1e, vₓ: %.1e → %.1e, vᵧ: %.1e → %.1e, ω: %.1e → %.1e\n', ...
-%                     orig_trust_T, P_scp.trust_T, orig_trust_delta, P_scp.trust_delta, ...
-%                     orig_trust_vx, P_scp.trust_vx, orig_trust_vy, P_scp.trust_vy, ...
-%                     orig_trust_omega, P_scp.trust_omega);
+            fprintf('    Retry %d: widening trust regions by factor %.1f\n', retry, retry_scale);
+            fprintf('      T: %.1e → %.1e, δ: %.1e → %.1e, vₓ: %.1e → %.1e, vᵧ: %.1e → %.1e, ω: %.1e → %.1e\n', ...
+                    orig_trust_T, P_scp.trust_T, orig_trust_delta, P_scp.trust_delta, ...
+                    orig_trust_vx, P_scp.trust_vx, orig_trust_vy, P_scp.trust_vy, ...
+                    orig_trust_omega, P_scp.trust_omega);
         end
         
         % Build subproblem with current retry level (affects slack bounds) and possibly widened trust radii
@@ -441,15 +446,13 @@ function merit = compute_merit(X, U, s_v, s_w, s_T_upper, s_T_lower, s_delta_upp
         J_quad = J_quad + P.w_ddelta * sum(ddelta_dt.^2);
     end
     
-    % Angular velocity magnitude penalty
-    if isfield(P, 'w_omega') && P.w_omega > 0
-        omega_trajectory = X(6, :);  % ω is 6th state
-        J_quad = J_quad + P.w_omega * sum(omega_trajectory.^2);
-    end
-    
     % --- Dynamics Slack Penalty Component ---
     % Get time-dependent slack weight
-    w_slack_current = slack_management_utils('compute_slack_weight', t_remaining, P.T, P);
+    if isfield(P, 'w_slack_initial') && isfield(P, 'w_slack_terminal')
+        w_slack_current = slack_management_utils('compute_slack_weight', t_remaining, P.T, P);
+    else
+        w_slack_current = P.w_slack;
+    end
     
     dynamics_slack_penalty = w_slack_current * (sum(abs(s_v(:))) + sum(abs(s_w(:))));
     
