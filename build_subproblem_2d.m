@@ -1,4 +1,4 @@
-function prob = build_subproblem_2d(X_ref, U_ref, P, t_remaining, retry_level)
+function prob = build_subproblem_2d(X_ref, U_ref, P, t_remaining, retry_level, iter)
 %BUILD_SUBPROBLEM_2D Constructs the convex QP for the rocket landing.
 %
 % This function performs the core work of SCP:
@@ -8,6 +8,7 @@ function prob = build_subproblem_2d(X_ref, U_ref, P, t_remaining, retry_level)
 % 3. Sets up equality constraints (dynamics) and inequality constraints
 %    (control limits, trust regions).
 % 4. Enhanced: Uses time-dependent slack weights and bounds
+% 5. Constraint softening: Adds large-penalty slacks for first 2 iterations
 
 % Handle optional parameters for backward compatibility
 if nargin < 4
@@ -16,6 +17,9 @@ end
 if nargin < 5
     retry_level = 0; % No retry if not specified
 end
+if nargin < 6
+    iter = 1; % Default to first iteration if not specified
+end
 
 N = P.N;
 n_x = P.n_states;
@@ -23,13 +27,23 @@ n_u = P.n_controls;
 dt = P.dt;
 
 % --- Decision Variable Vector 'z' ---
-% z = [vec(X); vec(U); vec(s_v); vec(s_w)]
-% where X is states, U is controls, s_v/s_w are slacks
+% z = [vec(X); vec(U); vec(s_v); vec(s_w); vec(s_T_upper); vec(s_T_lower); 
+%      vec(s_delta_upper); vec(s_delta_lower); vec(s_terminal)]
+% where X is states, U is controls, s_v/s_w are dynamics slacks,
+% s_T/s_delta are constraint violation slacks, s_terminal is terminal slack
 prob.idx.X = 1:(n_x * (N + 1));
 prob.idx.U = prob.idx.X(end) + (1:(n_u * N));
 prob.idx.s_v = prob.idx.U(end) + (1:(2 * N)); % For vx, vy dynamics
 prob.idx.s_w = prob.idx.s_v(end) + (1:(1 * N)); % For omega dynamics
-n_vars = prob.idx.s_w(end);
+
+% New constraint violation slacks (for softening during first 2 iterations)
+prob.idx.s_T_upper = prob.idx.s_w(end) + (1:N);        % Thrust upper bound violations
+prob.idx.s_T_lower = prob.idx.s_T_upper(end) + (1:N);  % Thrust lower bound violations
+prob.idx.s_delta_upper = prob.idx.s_T_lower(end) + (1:N); % Gimbal upper bound violations
+prob.idx.s_delta_lower = prob.idx.s_delta_upper(end) + (1:N); % Gimbal lower bound violations
+prob.idx.s_terminal = prob.idx.s_delta_lower(end) + (1:(n_x-1)); % Terminal constraint violations
+
+n_vars = prob.idx.s_terminal(end);
 
 % --- Cost Function: J = z' H z + f' z ---
 H = spalloc(n_vars, n_vars, 4*n_u*N);
@@ -57,6 +71,24 @@ else
     % Fallback to legacy constant weight
     f(prob.idx.s_v) = P.w_slack;
     f(prob.idx.s_w) = P.w_slack;
+end
+
+% Large penalty for constraint violation slacks (active only in first 2 iterations)
+constraint_slack_penalty = 1e6; % Very large penalty to discourage use
+if iter <= 2 || retry_level == 0
+    % Apply large penalties to all constraint violation slacks
+    f(prob.idx.s_T_upper) = constraint_slack_penalty;
+    f(prob.idx.s_T_lower) = constraint_slack_penalty;
+    f(prob.idx.s_delta_upper) = constraint_slack_penalty;
+    f(prob.idx.s_delta_lower) = constraint_slack_penalty;
+    f(prob.idx.s_terminal) = constraint_slack_penalty;
+else
+    % In later iterations, set infinite penalty (effectively disable slacks)
+    f(prob.idx.s_T_upper) = inf;
+    f(prob.idx.s_T_lower) = inf;
+    f(prob.idx.s_delta_upper) = inf;
+    f(prob.idx.s_delta_lower) = inf;
+    f(prob.idx.s_terminal) = inf;
 end
 
 % --- Dynamics Constraints: Aeq z = beq ---
@@ -105,6 +137,12 @@ x_idx_N = (N*n_x) + (1:n_x);  % Final state variables
 % Use rows after all dynamics: 7*(N+1) + (1:6)
 terminal_eq_rows = (n_x*(N+1)) + (1:n_x-1); % All states except mass
 Aeq(terminal_eq_rows, x_idx_N(1:n_x-1)) = speye(n_x-1);
+
+% Add terminal slack variables with -I coefficient (softening during first 2 iterations)
+if iter <= 2 || retry_level == 0
+    Aeq(terminal_eq_rows, prob.idx.s_terminal) = -speye(n_x-1);
+end
+
 beq(terminal_eq_rows) = target_state(1:n_x-1);
 
 % fprintf('  Dynamics rows: 1-%d, Terminal rows: %d-%d\n', ...
@@ -118,16 +156,34 @@ ub = inf(n_vars, 1);
 x_indices = reshape(prob.idx.X, n_x, N+1);
 lb(x_indices(7,:)') = P.m_dry;
 
-% Control bounds
+% Control bounds (modified for softening in first 2 iterations)
 u_indices = reshape(prob.idx.U, n_u, N);
-lb(u_indices(1,:)') = P.T_min;
-ub(u_indices(1,:)') = P.T_max;
-lb(u_indices(2,:)') = -P.delta_max;
-ub(u_indices(2,:)') = P.delta_max;
+
+if iter <= 2 || retry_level == 0
+    % In first 2 iterations: implement as soft inequality constraints
+    % Keep control bounds wide, actual constraints will be in Aineq
+    lb(u_indices(1,:)') = -inf;
+    ub(u_indices(1,:)') = inf;
+    lb(u_indices(2,:)') = -inf;
+    ub(u_indices(2,:)') = inf;
+else
+    % Later iterations: use hard bounds
+    lb(u_indices(1,:)') = P.T_min;
+    ub(u_indices(1,:)') = P.T_max;
+    lb(u_indices(2,:)') = -P.delta_max;
+    ub(u_indices(2,:)') = P.delta_max;
+end
 
 % Enhanced slack bounds (positive with adaptive upper bounds)
 lb(prob.idx.s_v) = 0;
 lb(prob.idx.s_w) = 0;
+
+% Positive lower bounds for constraint violation slacks
+lb(prob.idx.s_T_upper) = 0;
+lb(prob.idx.s_T_lower) = 0;
+lb(prob.idx.s_delta_upper) = 0;
+lb(prob.idx.s_delta_lower) = 0;
+lb(prob.idx.s_terminal) = 0;
 
 % Set adaptive upper bounds for slack variables
 if isfield(P, 'slack_max_initial') && isfield(P, 'slack_max_terminal')
@@ -166,9 +222,54 @@ if isfield(P, 'trust_vx') && isfield(P, 'trust_vy') && isfield(P, 'trust_omega')
     lb(x_indices(6,:)') = max(lb(x_indices(6,:)'), X_ref(6,:)' - P.trust_omega);
 end
 
+% --- Inequality Constraints for Soft Control Bounds ---
+if iter <= 2 || retry_level == 0
+    % Create inequality constraints: A_ineq * z <= b_ineq
+    % For thrust: T_k <= T_max + s_T_upper_k  =>  T_k - s_T_upper_k <= T_max
+    %             T_k >= T_min - s_T_lower_k  =>  -T_k - s_T_lower_k <= -T_min
+    % For gimbal: delta_k <= delta_max + s_delta_upper_k  =>  delta_k - s_delta_upper_k <= delta_max
+    %             delta_k >= -delta_max - s_delta_lower_k  =>  -delta_k - s_delta_lower_k <= delta_max
+    
+    n_ineq = 4 * N; % 4 inequalities per time step (T_upper, T_lower, delta_upper, delta_lower)
+    Aineq = spalloc(n_ineq, n_vars, 2 * n_ineq);
+    bineq = zeros(n_ineq, 1);
+    
+    % Build inequality constraints for each time step
+    for k = 1:N
+        u_idx_k = prob.idx.U(1) + (k-1)*n_u + (0:n_u-1);
+        
+        % Row indices for this time step's constraints
+        row_base = (k-1)*4;
+        
+        % Thrust upper bound: T_k - s_T_upper_k <= T_max
+        Aineq(row_base + 1, u_idx_k(1)) = 1;
+        Aineq(row_base + 1, prob.idx.s_T_upper(k)) = -1;
+        bineq(row_base + 1) = P.T_max;
+        
+        % Thrust lower bound: -T_k - s_T_lower_k <= -T_min
+        Aineq(row_base + 2, u_idx_k(1)) = -1;
+        Aineq(row_base + 2, prob.idx.s_T_lower(k)) = -1;
+        bineq(row_base + 2) = -P.T_min;
+        
+        % Gimbal upper bound: delta_k - s_delta_upper_k <= delta_max
+        Aineq(row_base + 3, u_idx_k(2)) = 1;
+        Aineq(row_base + 3, prob.idx.s_delta_upper(k)) = -1;
+        bineq(row_base + 3) = P.delta_max;
+        
+        % Gimbal lower bound: -delta_k - s_delta_lower_k <= delta_max
+        Aineq(row_base + 4, u_idx_k(2)) = -1;
+        Aineq(row_base + 4, prob.idx.s_delta_lower(k)) = -1;
+        bineq(row_base + 4) = P.delta_max;
+    end
+else
+    % Later iterations: no inequality constraints (use hard bounds)
+    Aineq = [];
+    bineq = [];
+end
+
 prob.H = H; prob.f = f;
 prob.Aeq = Aeq; prob.beq = beq;
-prob.Aineq = []; prob.bineq = [];
+prob.Aineq = Aineq; prob.bineq = bineq;
 prob.lb = lb; prob.ub = ub;
 prob.P = P;
 end

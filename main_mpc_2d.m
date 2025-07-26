@@ -138,17 +138,17 @@ P.g0          = 9.80665;           % m/s^2, standard gravity
 
 % === Trust Region Parameters (SCP Adaptive) ===
 % Control trust regions
-P.trust_init_T     = 0.30 * P.T_max;   % Initial trust in thrust change
-P.trust_init_delta = 0.5 * P.delta_max; % Initial trust in gimbal change
+P.trust_init_T     = 1 * P.T_max;   % Initial trust in thrust change
+P.trust_init_delta = 1 * P.delta_max; % Initial trust in gimbal change
 P.trust_min_T      = 0.05 * P.T_max;   % Minimum trust region for thrust
-P.trust_max_T      = 0.5 * P.T_max;    % Maximum trust region for thrust
+P.trust_max_T      = 1 * P.T_max;    % Maximum trust region for thrust
 P.trust_min_delta  = 0.05 * P.delta_max; % Minimum trust region for gimbal
 P.trust_max_delta  = 1.0 * P.delta_max;  % Maximum trust region for gimbal
 
 % State trust regions (matching 1D model approach)
-P.trust_init_vx    = 50;               % m/s trust for vx changes
-P.trust_init_vy    = 50;               % m/s trust for vy changes  
-P.trust_init_omega = deg2rad(20);      % rad/s trust for omega changes
+P.trust_init_vx    = 200;               % m/s trust for vx changes
+P.trust_init_vy    = 200;               % m/s trust for vy changes  
+P.trust_init_omega = deg2rad(90);      % rad/s trust for omega changes
 P.trust_min_vx     = 5;                % minimum vx trust region
 P.trust_max_vx     = 200;              % maximum vx trust region
 P.trust_min_vy     = 5;                % minimum vy trust region
@@ -162,7 +162,7 @@ P.trust_expand     = 1.25;             % Trust region expand factor
 P.slack_trigger    = 1e-3;             % Slack threshold for trust region adaptation
 
 % === Cost Weights & Penalties ===
-P.w_T         = 0;              % Thrust magnitude penalty
+P.w_T         = 1e-10;              % Thrust magnitude penalty
 P.w_delta     = 0;              % Gimbal angle penalty
 P.w_dT        = 0;              % Thrust rate penalty
 P.w_ddelta    = 0;               % Gimbal rate penalty
@@ -393,15 +393,21 @@ try
 
             % Run the SCP optimization with adaptive parameters and warm start
             % Pass simulation time for enhanced slack management
-            [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
+            if (sim_time == 0)
+                [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
+            else
+                [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
+            end
             total_scp_calls = total_scp_calls + 1;
 
             if isempty(scp_sol)
                 scp_sol = last_scp_sol;
                 scp_log = last_scp_log;
+            else
+                fprintf('  SCP converged in %d iterations, max retries = %d. Cost: %.2e, Slack: %.2e\n', ...
+                    length(scp_log.cost), max(scp_log.retry_level), scp_log.cost(end), scp_log.slack(end));
             end
-            fprintf('  SCP converged in %d iterations. Cost: %.2e, Slack: %.2e\n', ...
-                    length(scp_log.cost), scp_log.cost(end), scp_log.slack(end));
+            
             last_scp_sol = scp_sol;
             last_scp_log = scp_log;
             

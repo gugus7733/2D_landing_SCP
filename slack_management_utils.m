@@ -95,11 +95,11 @@ switch lower(action)
         time_progress = max(0, min(1, (T_horizon - t_remaining) / T_horizon));
         
         if retry_level > 0
-            fprintf('    SLACK RETRY %d: t_rem=%.2fs, prog=%.1f%%, w_slack=%.1e, tol=%.1e, s_max=%.1f, slack=%.1e\n', ...
-                retry_level, t_remaining, time_progress*100, w_slack, tol_slack, s_max(1), slack_norm);
+%             fprintf('    SLACK RETRY %d: t_rem=%.2fs, prog=%.1f%%, w_slack=%.1e, tol=%.1e, s_max=%.1f, slack=%.1e\n', ...
+%                 retry_level, t_remaining, time_progress*100, w_slack, tol_slack, s_max(1), slack_norm);
         else
-            fprintf('    Slack status: t_rem=%.2fs, prog=%.1f%%, w_slack=%.1e, tol=%.1e, s_max=%.1f, slack=%.1e\n', ...
-                t_remaining, time_progress*100, w_slack, tol_slack, s_max(1), slack_norm);
+%             fprintf('    Slack status: t_rem=%.2fs, prog=%.1f%%, w_slack=%.1e, tol=%.1e, s_max=%.1f, slack=%.1e\n', ...
+%                 t_remaining, time_progress*100, w_slack, tol_slack, s_max(1), slack_norm);
         end
         
     case 'validate_parameters'
