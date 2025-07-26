@@ -170,9 +170,9 @@ P.slack_trigger    = 1e-3;             % Slack threshold for trust region adapta
 
 % === Enhanced Slack Management Parameters ===
 P.w_slack_initial = 1e-6;           % Initial slack weight (lower for early convergence)
-P.w_slack_terminal = 1e6;           % Terminal slack weight (high to force zero slack)
+P.w_slack_terminal = 1e20;           % Terminal slack weight (high to force zero slack)
 P.slack_decay_alpha = 2.0;          % Slack weight progression exponent
-P.slack_decay_beta = 3.0;           % Time progression exponent (higher = sharper transition)
+P.slack_decay_beta = 10.0;           % Time progression exponent (higher = sharper transition)
 P.slack_max_initial = 400;          % Initial maximum allowed slack magnitude (m/s, rad/s)
 P.slack_max_terminal = 1e-1;        % Terminal maximum allowed slack magnitude
 P.slack_retry_multiplier = 100;     % Factor to increase slack bounds on retry
@@ -189,13 +189,13 @@ P.trust_T     = 0.3 * P.T_max;     % Trust region for thrust
 P.trust_delta = deg2rad(10);       % Trust region for gimbal
 
 %% Debug & Validation Options : true or false
-isDebug = false;
-n_debug_runs = 1;
-validate_linearization_flag = false; % Set to true to validate linearization accuracy
+isDebug = true;
+n_debug_runs = 3;
+validate_linearization_flag = true; % Set to true to validate linearization accuracy
 
 %% Control Replay System Parameters
-replay_control = false;           % Set to true to enable control replay mode
-t_replay_control = 25;            % Time until which replay is active (s)
+replay_control = true;           % Set to true to enable control replay mode
+t_replay_control = 12;            % Time until which replay is active (s)
 control_replay_filename = 'control_replay.mat'; % Filename for saved control log
 
 %% Open-Loop Control Verification Parameters
@@ -213,6 +213,7 @@ last_scp_log = [];
 scp_debug_history = struct('time', [], 'log', [], 'sol', []);
 total_scp_calls = 0;
 sim_time = 0;
+scp_computed = false;
 
 % Initialize control logging for crash recovery
 control_log = control_replay_utils('initialize');
@@ -417,15 +418,10 @@ try
     
                 % Run the SCP optimization with adaptive parameters and warm start
                 % Pass simulation time for enhanced slack management
-    %             if (sim_time == 0)
-    %                 [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
-    %             else
-    %                 [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
-    %             end
-                
                 [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
     
                 total_scp_calls = total_scp_calls + 1;
+                scp_computed = true;
     
                 if isempty(scp_sol)
                     scp_sol = last_scp_sol;
@@ -537,7 +533,7 @@ try
 %         fprintf('  State update: x=%.1f, y=%.1f, vx=%.1f, vy=%.1f, th=%.1f deg\n',...
 %             current_state(1), current_state(2), current_state(3), current_state(4), rad2deg(current_state(5)));
 
-        if isDebug
+        if isDebug && scp_computed
             % Store SCP debug info
             scp_debug_history.time(end+1) = sim_time;
             scp_debug_history.log{end+1} = scp_log;
@@ -546,6 +542,8 @@ try
                 break
             end
         end
+
+        scp_computed = false;
     end
 
 catch ME

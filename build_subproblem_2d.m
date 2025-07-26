@@ -75,21 +75,22 @@ f(prob.idx.s_v) = w_slack_current;
 f(prob.idx.s_w) = w_slack_current;
 
 % Large penalty for constraint violation slacks (active only in first 2 iterations)
-constraint_slack_penalty = 1e6; % Very large penalty to discourage use
+constraint_slack_penalty = 1e2; % Very large penalty to discourage use
+constraint_slack_penalty_hard = 1e30; % Very large penalty to discourage use
 if iter <= 2 || retry_level == 0
     % Apply large penalties to all constraint violation slacks
     f(prob.idx.s_T_upper) = constraint_slack_penalty;
     f(prob.idx.s_T_lower) = constraint_slack_penalty;
     f(prob.idx.s_delta_upper) = constraint_slack_penalty;
     f(prob.idx.s_delta_lower) = constraint_slack_penalty;
-    f(prob.idx.s_terminal) = constraint_slack_penalty;
+    f(prob.idx.s_terminal) = constraint_slack_penalty_hard;
 else
     % In later iterations, set infinite penalty (effectively disable slacks)
-    f(prob.idx.s_T_upper) = inf;
-    f(prob.idx.s_T_lower) = inf;
-    f(prob.idx.s_delta_upper) = inf;
-    f(prob.idx.s_delta_lower) = inf;
-    f(prob.idx.s_terminal) = inf;
+    f(prob.idx.s_T_upper) = constraint_slack_penalty_hard;
+    f(prob.idx.s_T_lower) = constraint_slack_penalty_hard;
+    f(prob.idx.s_delta_upper) = constraint_slack_penalty_hard;
+    f(prob.idx.s_delta_lower) = constraint_slack_penalty_hard;
+    f(prob.idx.s_terminal) = constraint_slack_penalty_hard;
 end
 
 % --- Dynamics Constraints: Aeq z = beq ---
@@ -140,9 +141,9 @@ terminal_eq_rows = (n_x*(N+1)) + (1:n_x-1); % All states except mass
 Aeq(terminal_eq_rows, x_idx_N(1:n_x-1)) = speye(n_x-1);
 
 % Add terminal slack variables with -I coefficient (softening during first 2 iterations)
-if iter <= 2 || retry_level == 0
-    Aeq(terminal_eq_rows, prob.idx.s_terminal) = -speye(n_x-1);
-end
+% if iter <= 2 || retry_level == 0
+%     Aeq(terminal_eq_rows, prob.idx.s_terminal) = -speye(n_x-1);
+% end
 
 beq(terminal_eq_rows) = target_state(1:n_x-1);
 
