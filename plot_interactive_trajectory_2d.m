@@ -51,8 +51,20 @@ text(ax_main, P.x_target + 10, P.y_target + 10, 'Target', 'FontSize', 12);
 
 
 %% Initialize animated elements
-% Rocket position marker
+% Load rocket image
+rocket_image_path = './figures_2d/f9_image.png';
+try
+    [rocket_img, ~, alpha] = imread(rocket_image_path);
+    has_rocket_image = true;
+catch
+    warning('Could not load rocket image from %s, using marker instead', rocket_image_path);
+    has_rocket_image = false;
+end
+
+% Rocket position marker (red dot for center of gravity)
 h_rocket = plot(ax_main, x_traj(1), y_traj(1), 'ro', 'MarkerSize', 8, 'MarkerFaceColor', 'r');
+
+% Rocket image will be created in update_display function
 
 % Vector arrows (unit length initially)
 vector_scale = 50; % Scaling factor for vector display
@@ -198,6 +210,9 @@ play_timer       = [];
 speed_multiplier = 1.0;  % Current speed multiplier (1.0 = real time)
 display_fps      = 30;   % Fixed display frame rate
 play_direction   = 1;    % 1 for forward, -1 for backward
+
+% Rocket image handle (declared here for proper scope)
+h_rocket_image   = [];
 
 % Fixed timer period and simulation parameters
 timer_period = 1 / display_fps;  % Fixed 33ms timer period
@@ -349,12 +364,46 @@ function update_display(fractional_idx)
     % Get interpolated data for current fractional index
     [interp_state, interp_vectors, interp_time] = interpolate_data(fractional_idx);
     
-    % Extract position
+    % Extract position and orientation
     x_pos = interp_state(1);
     y_pos = interp_state(2);
+    theta = interp_state(5); % Rocket pitch angle
     
-    % Update rocket position
+    % Update rocket position (center of gravity marker)
     set(h_rocket, 'XData', x_pos, 'YData', y_pos);
+    
+    % Update rocket image if available
+    if has_rocket_image
+        % Delete previous image if it exists
+        if ~isempty(h_rocket_image) && isvalid(h_rocket_image)
+            delete(h_rocket_image);
+        end
+        
+        % Calculate image size and position
+        image_scale = 0.05;
+        img_height = size(rocket_img, 1) * image_scale;
+        img_width = size(rocket_img, 2) * image_scale;
+        
+        % Create rotated image
+        % Rotate image by theta (rocket pitch angle)
+        % Note: imrotate rotates counterclockwise, theta is measured from vertical
+        rotated_img = imrotate(rocket_img, -rad2deg(theta) + 180, 'bilinear', 'crop');
+        rotated_alpha = imrotate(alpha, -rad2deg(theta) + 180, 'bilinear', 'crop');
+        
+        % Calculate image extents centered on rocket position
+        x_extent = [x_pos - img_width/2, x_pos + img_width/2];
+        y_extent = [y_pos - img_height/2, y_pos + img_height/2];
+        
+        % Display the rotated image
+        h_rocket_image = image(ax_main, x_extent, y_extent, rotated_img);
+        set(h_rocket_image, 'AlphaData', rotated_alpha);
+        
+        % Ensure rocket marker and vectors are on top of the image
+        uistack(h_rocket, 'top');
+        uistack(h_velocity, 'top');
+        uistack(h_orientation, 'top');
+        uistack(h_thrust, 'top');
+    end
     
     % Get interpolated vectors
     vel_vec    = interp_vectors.velocity;

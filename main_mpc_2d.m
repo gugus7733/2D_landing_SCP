@@ -86,7 +86,7 @@ P = struct();
 % === Simulation & Horizon ===
 P.dt_sim        = 0.01;              % Simulation timestep (s)
 P.N_scp_steps_open_loop = 30;         % Number of dt_scp steps to apply in open loop before recomputing SCP (0 = classic MPC)
-P.dt_scp        = 0.2;               % SCP optimization timestep (s)
+P.dt_scp        = 0.1;               % SCP optimization timestep (s)
 P.max_iters_scp = 10;
 P.fine_computation_time = 0.0;     % s, time before touchdown to switch to fine computation
 P.fine_computation_dt = 0.1;      % s, fine SCP dt (much smaller timestep)
@@ -116,7 +116,7 @@ P.omega0  = deg2rad(-20);        % rad/s, initial angular velocity
 
 % === Target State ===
 P.x_target     = 0;
-P.y_target     = 0;
+P.y_target     = P.L_com_from_base;
 P.vx_target    = 0;
 P.vy_target    = 0;
 P.theta_target = 0;
@@ -189,18 +189,18 @@ P.trust_T     = 0.3 * P.T_max;     % Trust region for thrust
 P.trust_delta = deg2rad(10);       % Trust region for gimbal
 
 %% Debug & Validation Options : true or false
-isDebug = true;
+isDebug = false;
 n_debug_runs = 3;
-validate_linearization_flag = true; % Set to true to validate linearization accuracy
+validate_linearization_flag = false; % Set to true to validate linearization accuracy
 
 %% Control Replay System Parameters
-replay_control = true;           % Set to true to enable control replay mode
-t_replay_control = 12;            % Time until which replay is active (s)
+replay_control = false;           % Set to true to enable control replay mode
+t_replay_control = 36;            % Time until which replay is active (s)
 control_replay_filename = 'control_replay.mat'; % Filename for saved control log
 
 %% Open-Loop Control Verification Parameters
 open_loop = false;                % Set to true to enable open-loop verification mode
-t_open_loop = 1;              % Time to switch to open-loop control (s)
+t_open_loop = 0.01;              % Time to switch to open-loop control (s)
 open_loop_horizon_limit = [];     % Max commands to use (empty = all available)
 
 
@@ -272,7 +272,7 @@ end
 try
     while sim_time < P.T_max_mission
         % --- Landing Check ---
-        if current_state(2) < 0.2 % Altitude check (y)
+        if current_state(2) < (P.y_target+0.2) % Altitude check (y)
             fprintf('\n>>> Landing detected at t=%.2f s <<<\n', sim_time);
             break;
         end
