@@ -506,7 +506,7 @@ if isempty(f_sym)
     th_dot = om;
 
     % Atmosphere (standard ISA)
-    [~,~,~,rho] = atmosisa(Xk(2));                   %#ok<ASGLU>
+    [~,~,~,rho] = atmosisa(Xk(2));
     V_sq  = vx^2 + vy^2;
     q     = 0.5*rho*P.A_ref*V_sq;
 

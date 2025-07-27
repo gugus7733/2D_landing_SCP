@@ -175,7 +175,7 @@ try
     
 catch ME
     % Fallback to cold start if resampling fails
-    fprintf('  Warning: Warm start failed (%s), using cold start\n', ME.message);
+%     fprintf('  Warning: Warm start failed (%s), using cold start\n', ME.message);
     [X_ref, U_ref] = cold_start_reference(P);
 end
 end
@@ -213,5 +213,5 @@ for k = 1:N
     U_ref(2, k) = max(-P.delta_max, min(P.delta_max, delta_est));
 end
 
-fprintf('  Cold start: Generated initial reference\n');
+% fprintf('  Cold start: Generated initial reference\n');
 end

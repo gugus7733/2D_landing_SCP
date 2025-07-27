@@ -85,9 +85,9 @@ P = struct();
 
 % === Simulation & Horizon ===
 P.dt_sim        = 0.01;              % Simulation timestep (s)
-P.N_scp_steps_open_loop = 30;         % Number of dt_scp steps to apply in open loop before recomputing SCP (0 = classic MPC)
+P.N_scp_steps_open_loop = 10;         % Number of dt_scp steps to apply in open loop before recomputing SCP (0 = classic MPC)
 P.dt_scp        = 0.3;               % SCP optimization timestep (s)
-P.max_iters_scp = 10;
+P.max_iters_scp = 3;
 P.fine_computation_time = 0.0;     % s, time before touchdown to switch to fine computation
 P.fine_computation_dt = 0.1;      % s, fine SCP dt (much smaller timestep)
 P.fine_computation_n_iter = 3;     % fine SCP max iterations (more iterations for accuracy)
@@ -155,7 +155,7 @@ P.trust_init_omega = deg2rad(90);      % rad/s trust for omega changes
 P.trust_min_T      = 0.5 * P.T_max;   % Minimum trust region for thrust
 P.trust_max_T      = 1 * P.T_max;    % Maximum trust region for thrust
 P.trust_min_delta  = 0.5 * P.delta_max; % Minimum trust region for gimbal
-P.trust_max_delta  = 1.0 * P.delta_max;  % Maximum trust region for gimbal
+P.trust_max_delta  = 1.0 * P.delta_max; % Maximum trust region for gimbal
 P.trust_min_vx     = 50;                % minimum vx trust region
 P.trust_max_vx     = 200;              % maximum vx trust region
 P.trust_min_vy     = 50;                % minimum vy trust region
@@ -188,14 +188,17 @@ P.tol_slack_terminal = 1e-12;       % Terminal slack tolerance (very strict)
 P.trust_T     = 0.3 * P.T_max;     % Trust region for thrust
 P.trust_delta = deg2rad(10);       % Trust region for gimbal
 
+[~, P.time_to_touchdown] = estimate_time_to_touchdown([P.x0;P.y0;P.vx0;P.vy0;P.theta0;P.omega0;P.m0], P);
+P.time_to_freeze_TTD = 10;
+
 %% Debug & Validation Options : true or false
-isDebug = true;
+isDebug = false;
 n_debug_runs = 1;
-validate_linearization_flag = true; % Set to true to validate linearization accuracy
+validate_linearization_flag = false; % Set to true to validate linearization accuracy
 
 %% Control Replay System Parameters
-replay_control = false;           % Set to true to enable control replay mode
-t_replay_control = 36;            % Time until which replay is active (s)
+replay_control = true;           % Set to true to enable control replay mode
+t_replay_control = 38.4;            % Time until which replay is active (s)
 control_replay_filename = 'control_replay.mat'; % Filename for saved control log
 
 %% Open-Loop Control Verification Parameters
@@ -213,6 +216,8 @@ last_scp_log = [];
 scp_debug_history = struct('time', [], 'log', [], 'sol', []);
 total_scp_calls = 0;
 sim_time = 0;
+current_timestamp  = sim_time;
+previous_timestamp = sim_time;
 scp_computed = false;
 
 % Initialize control logging for crash recovery
@@ -272,7 +277,8 @@ end
 try
     while sim_time < P.T_max_mission
         % --- Landing Check ---
-        if current_state(2) < (P.y_target+0.2) % Altitude check (y)
+        
+        if (sqrt((current_state(1) - P.x_target)^2 + (current_state(2) - P.y_target)^2) < 0.2) || current_state(2) < (P.y_target-5) % Altitude check (y)
             fprintf('\n>>> Landing detected at t=%.2f s <<<\n', sim_time);
             break;
         end
@@ -382,46 +388,26 @@ try
                 % Controls already set above, skip SCP computation
             else
                 % Estimate time to touchdown to set optimization horizon
-                [T_est, T_horizon] = estimate_time_to_touchdown(current_state, P);
-            
-                % Detect mode transitions for better reference trajectory handling
-                previous_fine_mode = false;
-                if ~isempty(last_scp_sol) && isfield(last_scp_sol, 'P_scp')
-                    previous_fine_mode = (last_scp_sol.P_scp.dt <= P.fine_computation_dt * 1.1);
-                end
-                
-                % Check if we're in fine computation phase (close to landing)
-                if T_est <= P.fine_computation_time
-                    % Fine computation: smaller timestep, more iterations
-                    dt_scp_current = P.fine_computation_dt;
-                    max_iters_current = P.fine_computation_n_iter;
-                    
-                    if ~previous_fine_mode
-                        fprintf('\n*** FINE COMPUTATION MODE ACTIVATED ***\n');
-                    end
-                    fprintf('t=%.2f s: Fine SCP (dt=%.3f s, max_iters=%d, Horizon=%.2f s)\n', ...
-                        sim_time, dt_scp_current, max_iters_current, T_horizon);
+                current_timestamp = sim_time;
+                elapsed_time = (current_timestamp - previous_timestamp);
+                P.time_to_touchdown = P.time_to_touchdown - elapsed_time;
+
+                [T_est, T_est_relax] = estimate_time_to_touchdown(current_state, P);
+
+                if (P.time_to_touchdown <= P.time_to_freeze_TTD)
+                    T_horizon = max(P.time_to_touchdown, 3*P.dt_scp);
+                    N_scp = max(round(T_horizon/P.dt_scp), 3);
+                    [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, P.dt_scp, P.max_iters_scp, last_scp_sol, sim_time);
                 else
-                    % Normal computation: standard timestep, fewer iterations  
-                    dt_scp_current = P.dt_scp;
-                    max_iters_current = P.max_iters_scp;
-                    
-                    if previous_fine_mode
-                        fprintf('\n*** RETURNING TO NORMAL COMPUTATION MODE ***\n');
-                    end
-                    fprintf('\nt=%.2f s: Normal SCP (dt=%.3f s, max_iters=%d, Horizon=%.2f s)\n', ...
-                        sim_time, dt_scp_current, max_iters_current, T_horizon);
+                    [scp_sol, scp_log, T_horizon, N_scp] = run_scp_best_tf(current_state, P, last_scp_sol, last_scp_log, sim_time);
                 end
-                
-                N_scp = round(T_horizon / dt_scp_current);
-                N_scp = max(N_scp, 3); % Ensure a minimum number of steps
-    
-                % Run the SCP optimization with adaptive parameters and warm start
-                % Pass simulation time for enhanced slack management
-                [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, dt_scp_current, max_iters_current, last_scp_sol, sim_time);
-    
+
+                fprintf("Here is a complete rundown of all the TTTD (Time To TouchDown): propagated tf = %.1f s, estimated tf = %.1f s, relaxed tf = %.1f s, optimized tf = %.1f s\n", P.time_to_touchdown, T_est, T_est_relax, T_horizon);
+                P.time_to_touchdown = T_horizon;
+
                 total_scp_calls = total_scp_calls + 1;
                 scp_computed = true;
+
     
                 if isempty(scp_sol)
                     scp_sol = last_scp_sol;
@@ -442,33 +428,35 @@ try
                     debug_specific_linearization_issues(scp_sol.X, scp_sol.U, current_state, T_horizon, N_scp, P);
                 end
     
-                    % Apply first optimal control from the SCP solution
-                    T_applied = last_scp_sol.U(1,1);
-                    delta_applied = last_scp_sol.U(2,1);
+                % Apply first optimal control from the SCP solution
+                T_applied = last_scp_sol.U(1,1);
+                delta_applied = last_scp_sol.U(2,1);
+                
+                % Check if should activate N-step open-loop mode
+                % Only activate if not in verification open-loop mode
+                if P.N_scp_steps_open_loop > 0 && ~n_step_open_loop_active && ~open_loop_active
+                    % Determine how many steps to capture from SCP solution
+                    available_steps = size(last_scp_sol.U, 2);
+                    n_steps_to_capture = min(P.N_scp_steps_open_loop, available_steps);
                     
-                    % Check if should activate N-step open-loop mode
-                    % Only activate if not in verification open-loop mode
-                    if P.N_scp_steps_open_loop > 0 && ~n_step_open_loop_active && ~open_loop_active
-                        % Determine how many steps to capture from SCP solution
-                        available_steps = size(last_scp_sol.U, 2);
-                        n_steps_to_capture = min(P.N_scp_steps_open_loop, available_steps);
+                    % Only activate if more than 1 step available (first step already applied above)
+                    if n_steps_to_capture > 1
+                        % Capture control sequence
+                        n_step_control_sequence = last_scp_sol.U(:, 1:n_steps_to_capture);
                         
-                        % Only activate if more than 1 step available (first step already applied above)
-                        if n_steps_to_capture > 1
-                            % Capture control sequence
-                            n_step_control_sequence = last_scp_sol.U(:, 1:n_steps_to_capture);
-                            
-                            % Create timestep sequence (timestep-agnostic)
-                            % Use consistent timestep from current SCP mode
-                            n_step_dt_sequence = repmat(dt_scp_current, 1, n_steps_to_capture);
-                            
-                            % Initialize N-step execution state
-                            n_step_remaining_steps = n_steps_to_capture - 1; % -1 because first step applied immediately
-                            n_step_command_index = 2; % Next step to apply (1 is already applied)
-                            n_step_open_loop_active = true;
-                            last_scp_call_time = sim_time;
-                        end
+                        % Create timestep sequence (timestep-agnostic)
+                        % Use consistent timestep from current SCP mode
+                        n_step_dt_sequence = repmat(P.dt_scp, 1, n_steps_to_capture);
+                        
+                        % Initialize N-step execution state
+                        n_step_remaining_steps = n_steps_to_capture - 1; % -1 because first step applied immediately
+                        n_step_command_index = 2; % Next step to apply (1 is already applied)
+                        n_step_open_loop_active = true;
+                        last_scp_call_time = sim_time;
                     end
+                end
+
+                previous_timestamp = current_timestamp;
             end
         end
         
@@ -478,7 +466,7 @@ try
         % Simulate forward using the nonlinear model
         % Integrate over one SCP interval (dt_scp_current) using smaller sim steps (dt_sim)
         temp_state = current_state;
-        num_sim_steps = round(dt_scp_current / P.dt_sim);
+        num_sim_steps = round(P.dt_scp / P.dt_sim);
 
         for i = 1:num_sim_steps
             % Extract state components for vector calculations
@@ -584,9 +572,16 @@ if open_loop_active || (open_loop && sim_time >= t_open_loop)
     end
 end
 
-fprintf('Final state: x=%.2f, y=%.2f, vx=%.2f, vy=%.2f, th=%.2f, w=%.2f\n',...
-    current_state(1), current_state(2), current_state(3), current_state(4),...
+final_error = current_state - [P.x_target;P.y_target;P.vx_target;P.vy_target;P.theta_target;P.omega_target;P.m_dry];
+
+% fprintf('Final state: x=%.2f, y=%.2f, vx=%.2f, vy=%.2f, th=%.2f, w=%.2f\n',...
+%     current_state(1), current_state(2), current_state(3), current_state(4),...
+%     rad2deg(current_state(5)), rad2deg(current_state(6)));
+
+fprintf('Final error: pos=%.2f m, vel=%.2f m/s, th=%.2f deg, w=%.2f deg/s\n',...
+    sqrt(final_error(1)^2+final_error(2)^2), sqrt(current_state(3)^2+current_state(4)^2),...
     rad2deg(current_state(5)), rad2deg(current_state(6)));
+
 fuel_used = P.m0 - current_state(7);
 fprintf('Fuel used: %.1f kg (%.1f%% of available)\n', fuel_used, 100*fuel_used/P.fuel_mass);
 
@@ -675,3 +670,50 @@ function [T_est, T_est_relax] = estimate_time_to_touchdown(state, P)
     % Clip relaxed time to global limits
     if isfield(P, 'T_max_mission'),   T_est_relax = min(T_est_relax, P.T_max_mission);   end
 end
+
+
+function [scp_sol, scp_log, T_horizon, N_scp] = run_scp_best_tf(current_state, P, last_scp_sol, last_scp_log, sim_time)
+
+eps_set = [-0.15 -0.1 -0.05 0 +0.05 0.1 0.15];
+all_costs = [];
+
+% Generate the structures : dirty
+if (isempty(last_scp_sol))
+    [all_sols, all_logs] = run_scp_2d(current_state, P.time_to_touchdown, round(P.time_to_touchdown / 0.5), P, 0.5, 1, last_scp_sol, sim_time);
+else
+    all_sols = last_scp_sol;
+    all_logs = last_scp_log;
+end
+
+all_tf = P.time_to_touchdown*(1+eps_set);
+used_tf = [];
+parfor i_eps = 1:numel(eps_set)
+    tf_i = all_tf(i_eps);
+    N_scp = round(tf_i / P.dt_scp);
+    [sol_i, log_i] = run_scp_2d(current_state, tf_i, N_scp, P, P.dt_scp, P.max_iters_scp, last_scp_sol, sim_time);
+
+    if (~isempty(sol_i))
+        used_tf(i_eps) = tf_i;
+        all_costs(i_eps) = log_i.cost(end);
+        all_sols(i_eps) = sol_i;
+        all_logs(i_eps) = log_i;
+    end
+end
+
+best_cost = inf;
+for i_cost = 1:numel(all_costs)
+    if  (all_costs(i_cost) < best_cost) && (~isempty(all_sols(i_cost))) && (sum(all_logs(i_cost).retry_level) == min(sum(cell2mat({all_logs.retry_level}'), 2)))
+        best_cost = all_costs(i_cost);
+        best_sol  = all_sols(i_cost);
+        best_log  = all_logs(i_cost);
+        best_tf    = used_tf(i_cost);
+    end
+end
+
+scp_sol = best_sol;
+scp_log = best_log;
+T_horizon = best_tf;
+N_scp = max(round(T_horizon / P.dt_scp), 3);
+
+end
+

@@ -206,6 +206,12 @@ for iter = 1:P_scp.max_iters
     log.merit_act(iter) = act_merit;
     log.merit_ratio(iter) = merit_ratio;
     log.trust_update_factor(iter) = trust_update_factor;
+
+    log.final_trust_T = 0;
+    log.final_trust_delta = 0;
+    log.final_trust_vx = 0;
+    log.final_trust_vy = 0;
+    log.final_trust_omega = 0;
     
     % Update previous merit for next iteration
     prev_merit = act_merit;
@@ -245,6 +251,10 @@ for iter = 1:P_scp.max_iters
 %                 slack_norm, trust_T/1e3, rad2deg(trust_delta), trust_vx, trust_vy, rad2deg(trust_omega));
     end
 
+    % Store trust regions in solution for persistence between SCP calls
+    sol.trust_regions = struct('T', trust_T, 'delta', trust_delta, ...
+                              'vx', trust_vx, 'vy', trust_vy, 'omega', trust_omega);
+
     % Check for convergence with time-dependent slack tolerance
     if iter > 1
         cost_change = abs(log.cost(iter) - log.cost(iter-1)) / max(abs(log.cost(iter-1)), 1e-8);
@@ -272,12 +282,6 @@ log.final_trust_delta = trust_delta;
 log.final_trust_vx = trust_vx;
 log.final_trust_vy = trust_vy;
 log.final_trust_omega = trust_omega;
-
-% Store trust regions in solution for persistence between SCP calls
-if ~isempty(sol)
-    sol.trust_regions = struct('T', trust_T, 'delta', trust_delta, ...
-                              'vx', trust_vx, 'vy', trust_vy, 'omega', trust_omega);
-end
 
 end
 
@@ -352,7 +356,7 @@ function [prob, z, cost_val, exitflag, retry_level] = solve_qp_with_retry(X_ref,
             % Success - return result
             z = z_attempt;
             if retry > 0
-                fprintf('    QP succeeded on retry %d with relaxed constraints\n', retry);
+%                 fprintf('    QP succeeded on retry %d with relaxed constraints\n', retry);
             end
             
             % Restore original trust radii (merit-based updates will handle changes)
@@ -366,10 +370,10 @@ function [prob, z, cost_val, exitflag, retry_level] = solve_qp_with_retry(X_ref,
         else
             % Failure - log and prepare for retry
             if retry < P_scp.max_slack_retries
-                fprintf('    QP failed (exitflag=%d), retrying with further relaxation (%d/%d)\n', ...
-                        exitflag, retry+1, P_scp.max_slack_retries);
+%                 fprintf('    QP failed (exitflag=%d), retrying with further relaxation (%d/%d)\n', ...
+%                         exitflag, retry+1, P_scp.max_slack_retries);
             else
-                fprintf('    QP failed (exitflag=%d) - all retries exhausted\n', exitflag);
+%                 fprintf('    QP failed (exitflag=%d) - all retries exhausted\n', exitflag);
             end
         end
     end
@@ -406,6 +410,8 @@ function sol = extract_solution(z, prob)
     sol.s_terminal = z(prob.idx.s_terminal);
     
     sol.P_scp = P;
+
+    sol.trust_regions = struct();
 end
 
 function merit = compute_merit(X, U, s_v, s_w, s_T_upper, s_T_lower, s_delta_upper, s_delta_lower, s_terminal, P, t_remaining, iter)
