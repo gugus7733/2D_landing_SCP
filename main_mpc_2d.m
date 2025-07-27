@@ -87,6 +87,8 @@ P = struct();
 P.dt_sim        = 0.01;              % Simulation timestep (s)
 P.N_scp_steps_open_loop = 10;         % Number of dt_scp steps to apply in open loop before recomputing SCP (0 = classic MPC)
 P.dt_scp        = 0.3;               % SCP optimization timestep (s)
+P.TTD_fine_scp  = 1;               % s
+P.dt_fine_scp   = 0.05;
 P.max_iters_scp = 3;
 P.fine_computation_time = 0.0;     % s, time before touchdown to switch to fine computation
 P.fine_computation_dt = 0.1;      % s, fine SCP dt (much smaller timestep)
@@ -106,13 +108,13 @@ P.L_com_from_base = 0.4 * P.L_rocket; % Center of Mass location from base (m)
 P.L_cop_from_base = 0.8 * P.L_rocket; % Center of Pressure from base (m)
 
 % === Initial State [x, y, vx, vy, theta, omega, m]' ===
-P.x0      = -1000;              % m, initial horizontal position
+P.x0      = -5000;              % m, initial horizontal position
 P.y0      = 5000;              % m, initial altitude
-P.vx0     = 100;              % m/s, initial horizontal velocity
-P.vy0     = -200;              % m/s, initial vertical velocity
-P.alpha0  = 15*d2r;            % rad, initial AoA
+P.vx0     = 300;              % m/s, initial horizontal velocity
+P.vy0     = -100;              % m/s, initial vertical velocity
+P.alpha0  = 0*d2r;            % rad, initial AoA
 P.theta0  = computeInitialSlope(P.alpha0, [P.vx0; P.vy0]);        % rad, initial pitch
-P.omega0  = deg2rad(-20);        % rad/s, initial angular velocity
+P.omega0  = deg2rad(0);        % rad/s, initial angular velocity
 
 % === Target State ===
 P.x_target     = 0;
@@ -124,7 +126,7 @@ P.omega_target = 0;
 
 % === Propulsion ===
 P.T_min       = 0.2 * 934e3;       % N, minimum thrust (approx. 1 Merlin engine)
-P.T_max       = 1e6;             % N, maximum thrust
+P.T_max       = 10e6;             % N, maximum thrust
 P.delta_max   = deg2rad(30.0);      % rad, max gimbal angle
 P.Isp         = 282;               % s, specific impulse
 
@@ -197,8 +199,8 @@ n_debug_runs = 1;
 validate_linearization_flag = false; % Set to true to validate linearization accuracy
 
 %% Control Replay System Parameters
-replay_control = true;           % Set to true to enable control replay mode
-t_replay_control = 38.4;            % Time until which replay is active (s)
+replay_control = false;           % Set to true to enable control replay mode
+t_replay_control = 27.30;            % Time until which replay is active (s)
 control_replay_filename = 'control_replay.mat'; % Filename for saved control log
 
 %% Open-Loop Control Verification Parameters
@@ -278,7 +280,7 @@ try
     while sim_time < P.T_max_mission
         % --- Landing Check ---
         
-        if (sqrt((current_state(1) - P.x_target)^2 + (current_state(2) - P.y_target)^2) < 0.2) || current_state(2) < (P.y_target-5) % Altitude check (y)
+        if (P.time_to_touchdown < 0) || (sqrt((current_state(1) - P.x_target)^2 + (current_state(2) - P.y_target)^2) < 0.2) || current_state(2) < (P.y_target-5) % Altitude check (y)
             fprintf('\n>>> Landing detected at t=%.2f s <<<\n', sim_time);
             break;
         end
@@ -392,18 +394,22 @@ try
                 elapsed_time = (current_timestamp - previous_timestamp);
                 P.time_to_touchdown = P.time_to_touchdown - elapsed_time;
 
-                [T_est, T_est_relax] = estimate_time_to_touchdown(current_state, P);
+%                 [T_est, T_est_relax] = estimate_time_to_touchdown(current_state, P);
 
                 if (P.time_to_touchdown <= P.time_to_freeze_TTD)
+                    if (P.time_to_touchdown <= P.TTD_fine_scp)
+                        P.dt_scp = P.dt_fine_scp;
+                    end
                     T_horizon = max(P.time_to_touchdown, 3*P.dt_scp);
                     N_scp = max(round(T_horizon/P.dt_scp), 3);
                     [scp_sol, scp_log] = run_scp_2d(current_state, T_horizon, N_scp, P, P.dt_scp, P.max_iters_scp, last_scp_sol, sim_time);
                 else
                     [scp_sol, scp_log, T_horizon, N_scp] = run_scp_best_tf(current_state, P, last_scp_sol, last_scp_log, sim_time);
+                    P.time_to_touchdown = T_horizon;
                 end
 
-                fprintf("Here is a complete rundown of all the TTTD (Time To TouchDown): propagated tf = %.1f s, estimated tf = %.1f s, relaxed tf = %.1f s, optimized tf = %.1f s\n", P.time_to_touchdown, T_est, T_est_relax, T_horizon);
-                P.time_to_touchdown = T_horizon;
+%                 fprintf("Here is a complete rundown of all the TTTD (Time To TouchDown): propagated tf = %.1f s, estimated tf = %.1f s, relaxed tf = %.1f s, optimized tf = %.1f s\n", P.time_to_touchdown, T_est, T_est_relax, T_horizon);
+                fprintf("Predicted TTTD (Time To TouchDown): %.1f s\n", P.time_to_touchdown);
 
                 total_scp_calls = total_scp_calls + 1;
                 scp_computed = true;
@@ -702,7 +708,7 @@ end
 
 best_cost = inf;
 for i_cost = 1:numel(all_costs)
-    if  (all_costs(i_cost) < best_cost) && (~isempty(all_sols(i_cost))) && (sum(all_logs(i_cost).retry_level) == min(sum(cell2mat({all_logs.retry_level}'), 2)))
+    if  (all_costs(i_cost) < best_cost) && (~isempty(all_sols(i_cost))) && (sum(all_logs(i_cost).retry_level) == min(cellfun(@(thiscell)sum(thiscell),{all_logs.retry_level})))
         best_cost = all_costs(i_cost);
         best_sol  = all_sols(i_cost);
         best_log  = all_logs(i_cost);
