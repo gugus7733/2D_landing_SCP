@@ -162,6 +162,7 @@ if ~isempty(scp_sol)
     dt_scp = P.dt_scp;
     T_horizon = N * dt_scp;
     time_vec = linspace(0, T_horizon, N);
+    time_vec_states = linspace(0, (N+1) * dt_scp, N+1);
     
     fprintf('  SCP Solution: N=%d steps, dt=%.2fs, horizon=%.2fs\n', N, dt_scp, T_horizon);
     
@@ -180,22 +181,20 @@ if ~isempty(scp_sol)
     
     % State Trajectories (key states)
     nexttile;
-    plot(time_vec, scp_sol.X(1,1:end-1), 'b-', 'LineWidth', 2); hold on;
-    plot(time_vec, scp_sol.X(2,1:end-1), 'r-', 'LineWidth', 2);
+    plot(time_vec_states, scp_sol.X(1,1:end), 'b-', 'LineWidth', 2); hold on;
+    plot(time_vec_states, scp_sol.X(2,1:end), 'r-', 'LineWidth', 2);
     legend('x (m)', 'y (m)', 'Location', 'best');
     ylabel('Position'); xlabel('Time in Horizon (s)');
     title('Predicted Position');
     grid on;
     
     nexttile;
-    plot(time_vec, scp_sol.X(3,1:end-1), 'b-', 'LineWidth', 2); hold on;
-    plot(time_vec, scp_sol.X(4,1:end-1), 'r-', 'LineWidth', 2);
+    plot(time_vec_states, scp_sol.X(3,1:end), 'b-', 'LineWidth', 2); hold on;
+    plot(time_vec_states, scp_sol.X(4,1:end), 'r-', 'LineWidth', 2);
     legend('vx (m/s)', 'vy (m/s)', 'Location', 'best');
     ylabel('Velocity'); xlabel('Time in Horizon (s)');
     title('Predicted Velocity');
     grid on;
 end
-
-% Diagnostic summary removed per user request
 
 end

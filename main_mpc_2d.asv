@@ -189,9 +189,9 @@ P.trust_T     = 0.3 * P.T_max;     % Trust region for thrust
 P.trust_delta = deg2rad(10);       % Trust region for gimbal
 
 %% Debug & Validation Options : true or false
-isDebug = true;
-n_debug_runs = 1;
-validate_linearization_flag = true; % Set to true to validate linearization accuracy
+isDebug = false;
+n_debug_runs = 3;
+validate_linearization_flag = false; % Set to true to validate linearization accuracy
 
 %% Control Replay System Parameters
 replay_control = false;           % Set to true to enable control replay mode
@@ -427,9 +427,8 @@ try
                     scp_sol = last_scp_sol;
                     scp_log = last_scp_log;
                 else
-                    final_error = scp_sol.X(:,end) - [P.x_target;P.y_target;P.vx_target;P.vy_target;P.theta_target;P.omega_target;P.m_dry];
-                    fprintf('SCP converged in %d iterations, max retries = %d. Predicted pos error: %.1f, Predicted V error: %.1f\n', ...
-                        length(scp_log.cost), max(scp_log.retry_level), sqrt(final_error(1)^2+final_error(2)^2), sqrt(final_error(3)^2+final_error(4)^2));
+                    fprintf('  SCP converged in %d iterations, max retries = %d. Cost: %.2e, Slack: %.2e\n', ...
+                        length(scp_log.cost), max(scp_log.retry_level), scp_log.cost(end), scp_log.slack(end));
                 end
                 
                 last_scp_sol = scp_sol;
